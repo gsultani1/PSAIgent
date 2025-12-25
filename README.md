@@ -1,6 +1,12 @@
-# PowerShell AI Assistant Profile
+# PSAigent
 
-A modular PowerShell profile with an integrated AI chat assistant that can execute commands, search the web, manage files, and interact with your system.
+> Turn your PowerShell terminal into an AI-powered assistant. Chat with Claude, GPT, or local LLMs. Execute commands, manage files, search the web, and connect to MCP servers.
+
+![PowerShell](https://img.shields.io/badge/PowerShell-5.1%2B-blue)
+![License](https://img.shields.io/badge/License-MIT-green)
+![AI](https://img.shields.io/badge/AI-Claude%20%7C%20GPT%20%7C%20Ollama-purple)
+
+**Topics:** `powershell` `ai-assistant` `claude` `chatgpt` `ollama` `llm` `terminal` `mcp` `automation` `cli`
 
 ## Features
 
@@ -167,4 +173,4 @@ MIT License - See LICENSE file
 
 ## Author
 
-Created with ❤️ and AI assistance
+George Sultani

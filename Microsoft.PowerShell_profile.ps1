@@ -22,7 +22,7 @@ if ($Host.UI.RawUI.WindowTitle) { Clear-Host }
 
 # ===== Module Loading =====
 $global:ModulesPath = "$PSScriptRoot\Modules"
-$global:DebugModuleLoading = $true  # Set to $true to see module load errors
+$global:DebugModuleLoading = $false  # Set to $true to see module load errors
 
 # Core modules (always load) - use direct dot-sourcing for reliability
 . "$PSScriptRoot\IntentAliasSystem.ps1"

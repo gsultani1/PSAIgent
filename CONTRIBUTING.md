@@ -1,4 +1,4 @@
-# Contributing to PowerAIOS
+# Contributing to PSAigent
 
 Thank you for your interest in contributing! This document provides guidelines for contributing to the project.
 

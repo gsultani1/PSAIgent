@@ -2,7 +2,7 @@
 
 ## Project Name Ideas
 - **PowerAIOS** - Generic but clear
-
+- **IDKPSAI** - Because IDK what to call it
 ---
 
 ## Pre-Release Checklist
@@ -10,9 +10,9 @@
 ### 1. Code Cleanup
 - [x] Remove any hardcoded paths or personal info (uses $env:USERPROFILE, $PSScriptRoot)
 - [x] Audit all files for API keys or secrets (ChatConfig.json gitignored, .example files provided)
-- [ ] Remove debug/test code
-- [ ] Ensure consistent code style
-- [ ] Add error handling where missing
+- [x] Remove debug/test code (disabled DebugModuleLoading)
+- [x] Ensure consistent code style (reviewed - consistent)
+- [x] Add error handling where missing (reviewed - adequate)
 
 ### 2. Documentation
 - [x] README.md with features, installation, usage
@@ -20,15 +20,15 @@
 - [x] .gitignore for secrets
 - [x] ChatConfig.example.json
 - [x] ToolPreferences.example.json
-- [ ] CONTRIBUTING.md - How to contribute
-- [ ] CHANGELOG.md - Version history
-- [ ] Add inline comments to complex functions
+- [x] CONTRIBUTING.md - How to contribute
+- [x] CHANGELOG.md - Version history
+- [x] Add inline comments to complex functions (already documented)
 
 ### 3. Repository Setup
-- [ ] Create GitHub repository
-- [ ] Choose a good name (see ideas above)
-- [ ] Write compelling repo description
-- [ ] Add topics/tags: `powershell`, `ai`, `chatgpt`, `claude`, `ollama`, `terminal`, `assistant`
+- [x] Create GitHub repository
+- [ ] Change the name (see ideas above)(Currently just WndowsPowershell)
+- [x] Write compelling repo description
+- [x] Add topics/tags: `powershell`, `ai`, `chatgpt`, `claude`, `ollama`, `terminal`, `assistant`
 - [ ] Set up GitHub Pages for docs (optional)
 
 ### 4. First Release (v1.0.0)
