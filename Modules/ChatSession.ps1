@@ -437,6 +437,15 @@ function Save-Chat {
     
     if (-not $Auto) {
         Write-Host "Saved session '$($global:ChatSessionName)' ($($global:ChatSessionHistory.Count) messages)" -ForegroundColor Green
+        if (Get-Command Send-ShелixToast -ErrorAction SilentlyContinue) {
+            Send-ShелixToast -Title "Session saved" -Message "'$($global:ChatSessionName)' — $($global:ChatSessionHistory.Count) messages" -Type Info
+        }
+    }
+    else {
+        # Auto-save on exit — toast so the user knows context was preserved
+        if (Get-Command Send-ShелixToast -ErrorAction SilentlyContinue) {
+            Send-ShелixToast -Title "Session auto-saved" -Message "'$($global:ChatSessionName)' — $($global:ChatSessionHistory.Count) messages" -Type Info
+        }
     }
     
     return $filePath

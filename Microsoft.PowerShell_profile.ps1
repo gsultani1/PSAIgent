@@ -60,8 +60,9 @@ if (Test-Path $global:ModulesPath) {
     . "$global:ModulesPath\ProfileHelp.ps1"        # Help and tips
     
     # Chat session (depends on many modules)
-    . "$global:ModulesPath\FolderContext.ps1"      # Folder awareness for AI context
-    . "$global:ModulesPath\ChatSession.ps1"        # LLM chat loop
+    . "$global:ModulesPath\ToastNotifications.ps1"   # Toast notifications
+    . "$global:ModulesPath\FolderContext.ps1"        # Folder awareness for AI context
+    . "$global:ModulesPath\ChatSession.ps1"          # LLM chat loop
 }
 
 # Core modules (load AFTER modules so real functions exist before stub checks)
