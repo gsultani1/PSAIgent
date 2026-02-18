@@ -36,6 +36,7 @@ Desktop.ini
 *.swo
 
 # Personal notes and plans
+project docs/
 plan.md
 notes.md
 todo.md
