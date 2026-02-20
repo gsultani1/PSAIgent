@@ -2,7 +2,7 @@
 # Natural language to command translation and token estimation
 
 # ===== Data-Driven Natural Language Mappings =====
-$global:NLMappingsPath = "$PSScriptRoot\..\NaturalLanguageMappings.json"
+$global:NLMappingsPath = "$global:ShelixHome\data\NaturalLanguageMappings.json"
 $global:NLMappings = $null
 
 function Import-NaturalLanguageMappings {

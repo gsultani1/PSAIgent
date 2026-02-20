@@ -78,11 +78,7 @@ $global:ChatProviders = @{
 $global:DefaultChatProvider = 'ollama'
 
 # ===== Config File Loading =====
-$global:ChatConfigPath = if ($global:ModulesPath) {
-    Join-Path (Split-Path $global:ModulesPath -Parent) 'ChatConfig.json'
-} else {
-    Join-Path (Split-Path $PROFILE -Parent) 'ChatConfig.json'
-}
+$global:ChatConfigPath = "$global:ShelixHome\config\ChatConfig.json"
 $global:ChatConfig = $null
 
 function Import-ChatConfig {

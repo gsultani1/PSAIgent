@@ -22,6 +22,135 @@ Set-PSReadLineOption -HistorySearchCursorMovesToEnd
 # Suppress startup noise
 if ($Host.UI.RawUI.WindowTitle) { Clear-Host }
 
+# ===== Shelix Home (user data, separate from module install path) =====
+$global:ShelixHome = "$env:USERPROFILE\.shelix"
+$global:ShelixModulePath = $PSScriptRoot
+
+function Initialize-ShelixHome {
+    # Create the ~/.shelix directory tree on first run
+    $dirs = @(
+        $global:ShelixHome
+        "$global:ShelixHome\config"
+        "$global:ShelixHome\data"
+        "$global:ShelixHome\logs"
+        "$global:ShelixHome\logs\sessions"
+        "$global:ShelixHome\plugins"
+        "$global:ShelixHome\plugins\Config"
+        "$global:ShelixHome\skills"
+        "$global:ShelixHome\aliases"
+    )
+    foreach ($d in $dirs) {
+        if (-not (Test-Path $d)) {
+            New-Item -ItemType Directory -Path $d -Force | Out-Null
+        }
+    }
+
+    # First-run migration: copy old files to new locations if they exist
+    $migrated = @()
+    $oldRoot = $PSScriptRoot
+
+    # Config/.env -> ~/.shelix/config/.env
+    $oldEnv = "$oldRoot\Config\.env"
+    $newEnv = "$global:ShelixHome\config\.env"
+    if ((Test-Path $oldEnv) -and -not (Test-Path $newEnv)) {
+        Copy-Item $oldEnv $newEnv -Force
+        $migrated += ".env"
+    }
+
+    # ChatConfig.json -> ~/.shelix/config/ChatConfig.json
+    $oldChat = "$oldRoot\ChatConfig.json"
+    $newChat = "$global:ShelixHome\config\ChatConfig.json"
+    if ((Test-Path $oldChat) -and -not (Test-Path $newChat)) {
+        Copy-Item $oldChat $newChat -Force
+        $migrated += "ChatConfig.json"
+    }
+
+    # ToolPreferences.json -> ~/.shelix/config/ToolPreferences.json
+    $oldTP = "$oldRoot\ToolPreferences.json"
+    $newTP = "$global:ShelixHome\config\ToolPreferences.json"
+    if ((Test-Path $oldTP) -and -not (Test-Path $newTP)) {
+        Copy-Item $oldTP $newTP -Force
+        $migrated += "ToolPreferences.json"
+    }
+
+    # UserSkills.json -> ~/.shelix/skills/UserSkills.json
+    $oldSkills = "$oldRoot\UserSkills.json"
+    $newSkills = "$global:ShelixHome\skills\UserSkills.json"
+    if ((Test-Path $oldSkills) -and -not (Test-Path $newSkills)) {
+        Copy-Item $oldSkills $newSkills -Force
+        $migrated += "UserSkills.json"
+    }
+
+    # UserAliases.ps1 -> ~/.shelix/aliases/UserAliases.ps1
+    $oldAliases = "$oldRoot\UserAliases.ps1"
+    $newAliases = "$global:ShelixHome\aliases\UserAliases.ps1"
+    if ((Test-Path $oldAliases) -and -not (Test-Path $newAliases)) {
+        Copy-Item $oldAliases $newAliases -Force
+        $migrated += "UserAliases.ps1"
+    }
+
+    # NaturalLanguageMappings.json -> ~/.shelix/data/NaturalLanguageMappings.json
+    $oldNL = "$oldRoot\NaturalLanguageMappings.json"
+    $newNL = "$global:ShelixHome\data\NaturalLanguageMappings.json"
+    if ((Test-Path $oldNL) -and -not (Test-Path $newNL)) {
+        Copy-Item $oldNL $newNL -Force
+        $migrated += "NaturalLanguageMappings.json"
+    }
+
+    # ~/Documents/ChatLogs/ -> ~/.shelix/logs/sessions/
+    $oldLogs = "$env:USERPROFILE\Documents\ChatLogs"
+    $newLogs = "$global:ShelixHome\logs\sessions"
+    if ((Test-Path $oldLogs) -and (Get-ChildItem $oldLogs -Filter "*.json" -ErrorAction SilentlyContinue).Count -gt 0) {
+        $existingNew = (Get-ChildItem $newLogs -Filter "*.json" -ErrorAction SilentlyContinue).Count
+        if ($existingNew -eq 0) {
+            Copy-Item "$oldLogs\*.json" $newLogs -Force -ErrorAction SilentlyContinue
+            $migrated += "ChatLogs ($(( Get-ChildItem $newLogs -Filter '*.json' -ErrorAction SilentlyContinue).Count) sessions)"
+        }
+    }
+
+    # ~/Documents/ChatLogs/AIExecutionLog.json -> ~/.shelix/logs/AIExecutionLog.json
+    $oldExecLog = "$env:USERPROFILE\Documents\ChatLogs\AIExecutionLog.json"
+    $newExecLog = "$global:ShelixHome\logs\AIExecutionLog.json"
+    if ((Test-Path $oldExecLog) -and -not (Test-Path $newExecLog)) {
+        Copy-Item $oldExecLog $newExecLog -Force
+        $migrated += "AIExecutionLog.json"
+    }
+
+    # Plugins/ -> ~/.shelix/plugins/ (user plugin files only, skip bundled examples)
+    $oldPlugins = "$oldRoot\Plugins"
+    if (Test-Path $oldPlugins) {
+        $userPlugins = Get-ChildItem "$oldPlugins\*.ps1" -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -notlike '_Example*' -and $_.Name -notlike '_Pomodoro*' -and $_.Name -notlike '_QuickNotes*' }
+        foreach ($p in $userPlugins) {
+            $dest = Join-Path "$global:ShelixHome\plugins" $p.Name
+            if (-not (Test-Path $dest)) {
+                Copy-Item $p.FullName $dest -Force
+                $migrated += "Plugin: $($p.Name)"
+            }
+        }
+        # Plugin configs
+        $oldPConfig = "$oldPlugins\Config"
+        if (Test-Path $oldPConfig) {
+            Get-ChildItem "$oldPConfig\*.json" -ErrorAction SilentlyContinue | ForEach-Object {
+                $dest = Join-Path "$global:ShelixHome\plugins\Config" $_.Name
+                if (-not (Test-Path $dest)) {
+                    Copy-Item $_.FullName $dest -Force
+                }
+            }
+        }
+    }
+
+    if ($migrated.Count -gt 0) {
+        Write-Host "`n[Shelix] Migrated $($migrated.Count) item(s) to $global:ShelixHome" -ForegroundColor Cyan
+        foreach ($m in $migrated) {
+            Write-Host "  - $m" -ForegroundColor DarkCyan
+        }
+        Write-Host "  Old files left in place (safe to remove manually).`n" -ForegroundColor DarkGray
+    }
+}
+
+Initialize-ShelixHome
+
 # ===== Module Loading =====
 $global:ModulesPath = "$PSScriptRoot\Modules"
 $global:DebugModuleLoading = $false  # Set to $true to see module load errors
@@ -32,6 +161,7 @@ if (Test-Path $global:ModulesPath) {
     . "$global:ModulesPath\ConfigLoader.ps1"       # Load .env config FIRST
     . "$global:ModulesPath\PlatformUtils.ps1"      # Cross-platform helpers
     . "$global:ModulesPath\SecurityUtils.ps1"      # Path/URL security
+    . "$global:ModulesPath\SecretScanner.ps1"      # Secret detection (before CommandValidation so scan runs early)
     . "$global:ModulesPath\CommandValidation.ps1"  # Command safety tables
     
     # System and utilities
@@ -57,6 +187,7 @@ if (Test-Path $global:ModulesPath) {
     # Context awareness
     . "$global:ModulesPath\BrowserAwareness.ps1"   # Browser tab awareness
     . "$global:ModulesPath\VisionTools.ps1"        # Vision model support (screenshot, image analysis)
+    . "$global:ModulesPath\OCRTools.ps1"           # Tesseract OCR + pdftotext integration
     . "$global:ModulesPath\CodeArtifacts.ps1"      # AI code generation artifacts
 
     # User experience
@@ -67,7 +198,9 @@ if (Test-Path $global:ModulesPath) {
     # Chat session (depends on many modules)
     . "$global:ModulesPath\ToastNotifications.ps1"   # Toast notifications
     . "$global:ModulesPath\FolderContext.ps1"        # Folder awareness for AI context
+    . "$global:ModulesPath\ChatStorage.ps1"          # SQLite chat persistence + FTS5 search
     . "$global:ModulesPath\ChatSession.ps1"          # LLM chat loop
+    . "$global:ModulesPath\AgentHeartbeat.ps1"       # Cron-triggered agent tasks
 }
 
 # Core modules (load AFTER modules so real functions exist before stub checks)
@@ -181,6 +314,11 @@ function gst { Enable-PoshGit; git status @args }
 
 # ===== Profile Reload =====
 Set-Alias reload ". $PROFILE" -Force
+
+# ===== Startup Secret Scan =====
+if (Get-Command Invoke-StartupSecretScan -ErrorAction SilentlyContinue) {
+    Invoke-StartupSecretScan
+}
 
 # ===== Startup Message =====
 $global:ProfileLoadTime = (Get-Date) - $global:ProfileLoadStart

@@ -4,7 +4,7 @@
 #
 # Must be loaded AFTER IntentAliasSystem.ps1 so the registries exist.
 
-$global:UserSkillsPath = "$PSScriptRoot\..\UserSkills.json"
+$global:UserSkillsPath = "$global:ShelixHome\skills\UserSkills.json"
 $global:LoadedUserSkills = [ordered]@{}
 
 function Import-UserSkills {

@@ -70,7 +70,7 @@ $global:ToolRegistry = @{
 }
 
 # ===== User Preferences =====
-$global:ToolPreferencesPath = "$PSScriptRoot\..\ToolPreferences.json"
+$global:ToolPreferencesPath = "$global:ShelixHome\config\ToolPreferences.json"
 $global:ToolPreferences = $null
 
 function Import-ToolPreferences {

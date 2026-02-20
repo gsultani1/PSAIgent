@@ -997,6 +997,35 @@ try {
         return $result
     }
 
+    "ocr_file"                  = {
+        param($path, $language)
+        if (-not $path) {
+            return @{ Success = $false; Output = "Error: path parameter required"; Error = $true }
+        }
+        if (Get-Command Test-PathAllowed -ErrorAction SilentlyContinue) {
+            $validation = Test-PathAllowed -Path $path
+            if (-not $validation.Success) {
+                return @{ Success = $false; Output = "Security: $($validation.Message)"; Error = $true }
+            }
+            $path = $validation.Path
+        }
+        if (-not (Test-Path $path)) {
+            return @{ Success = $false; Output = "File not found: $path"; Error = $true }
+        }
+        if (-not $language) { $language = 'eng' }
+        $ext = [System.IO.Path]::GetExtension($path).ToLower()
+        if ($ext -eq '.pdf') {
+            if (Get-Command ConvertFrom-PDF -ErrorAction SilentlyContinue) {
+                return ConvertFrom-PDF -PdfPath $path -Language $language
+            }
+            return @{ Success = $false; Output = "OCRTools module not loaded"; Error = $true }
+        }
+        if (Get-Command Invoke-OCR -ErrorAction SilentlyContinue) {
+            return Invoke-OCR -ImagePath $path -Language $language
+        }
+        return @{ Success = $false; Output = "OCRTools module not loaded"; Error = $true }
+    }
+
 }
 
 Write-Verbose "IntentActionsSystem loaded: apps, workflows, system, filesystem, agent intents added"

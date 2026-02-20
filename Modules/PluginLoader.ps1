@@ -5,8 +5,9 @@
 #
 # Must be loaded AFTER IntentAliasSystem.ps1 so the registries exist.
 
-$global:PluginsPath = "$PSScriptRoot\..\Plugins"
-$global:PluginConfigPath = "$PSScriptRoot\..\Plugins\Config"
+$global:PluginsPath = "$global:ShelixHome\plugins"
+$global:PluginConfigPath = "$global:ShelixHome\plugins\Config"
+$global:BundledPluginsPath = "$PSScriptRoot\..\Plugins"
 $global:LoadedPlugins = [ordered]@{}
 $global:PluginHelpers = @{}
 $global:PluginSettings = @{}
@@ -104,16 +105,28 @@ function Import-ShelixPlugins {
         [string]$Name
     )
 
-    if (-not (Test-Path $global:PluginsPath)) {
+    # Collect plugins from both user dir (~/.shelix/plugins) and bundled dir (module Plugins/)
+    $pluginFiles = @()
+    $searchPaths = @($global:PluginsPath, $global:BundledPluginsPath) | Where-Object { $_ -and (Test-Path $_) }
+    if ($searchPaths.Count -eq 0) {
         if (-not $Quiet) {
-            Write-Host "Plugins directory not found — skipping plugin load." -ForegroundColor DarkGray
+            Write-Host "Plugins directory not found -- skipping plugin load." -ForegroundColor DarkGray
         }
         return
     }
-
-    $pluginFiles = Get-ChildItem "$global:PluginsPath\*.ps1" -ErrorAction SilentlyContinue |
-        Where-Object { $_.Name -notlike '_*' } |
-        Sort-Object Name
+    $seen = @{}
+    foreach ($sp in $searchPaths) {
+        Get-ChildItem "$sp\*.ps1" -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -notlike '_*' } |
+            ForEach-Object {
+                # User plugins override bundled plugins with the same name
+                if (-not $seen.ContainsKey($_.Name)) {
+                    $seen[$_.Name] = $true
+                    $pluginFiles += $_
+                }
+            }
+    }
+    $pluginFiles = $pluginFiles | Sort-Object Name
 
     if ($Name) {
         $pluginFiles = $pluginFiles | Where-Object { $_.BaseName -eq $Name }

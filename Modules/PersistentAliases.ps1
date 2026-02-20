@@ -3,7 +3,7 @@
 # Stored in UserAliases.ps1 file
 
 # ===== Configuration =====
-$global:UserAliasesPath = "$PSScriptRoot\..\UserAliases.ps1"
+$global:UserAliasesPath = "$global:ShelixHome\aliases\UserAliases.ps1"
 
 function Add-PersistentAlias {
     <#

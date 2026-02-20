@@ -1,0 +1,53 @@
+{
+  "_comment": "User-defined custom intents. Copy this file to UserSkills.json and customize.",
+  "_docs": "Each skill becomes an intent the AI can call. Steps run in sequence.",
+  "skills": {
+    "deploy_staging": {
+      "description": "Pull latest code and show git status",
+      "category": "devops",
+      "parameters": [
+        { "name": "branch", "required": false, "default": "main", "description": "Git branch to deploy" }
+      ],
+      "triggers": ["deploy staging", "push to staging"],
+      "confirm": true,
+      "steps": [
+        { "command": "git checkout {branch}" },
+        { "command": "git pull origin {branch}" },
+        { "intent": "git_status" }
+      ]
+    },
+    "morning_report": {
+      "description": "Show calendar, git status, and system info",
+      "category": "custom",
+      "steps": [
+        { "intent": "calendar_today" },
+        { "intent": "git_status" },
+        { "intent": "system_info" }
+      ]
+    },
+    "quick_backup": {
+      "description": "Create a timestamped zip backup of a folder",
+      "category": "custom",
+      "parameters": [
+        { "name": "path", "required": true, "description": "Folder to back up" }
+      ],
+      "confirm": true,
+      "steps": [
+        { "command": "Compress-Archive -Path '{path}' -DestinationPath \"{path}_$(Get-Date -Format 'yyyyMMdd_HHmmss').zip\"" }
+      ]
+    },
+    "project_init": {
+      "description": "Create a new project folder with git init and README",
+      "category": "devops",
+      "parameters": [
+        { "name": "name", "required": true, "description": "Project name" }
+      ],
+      "steps": [
+        { "command": "New-Item -ItemType Directory -Path '{name}' -Force" },
+        { "command": "Set-Location '{name}'" },
+        { "command": "git init" },
+        { "command": "'# {name}' | Set-Content README.md -Encoding UTF8" }
+      ]
+    }
+  }
+}

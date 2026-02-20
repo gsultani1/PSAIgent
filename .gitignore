@@ -41,8 +41,9 @@ Desktop.ini
 # AI assistant worktrees (local dev artifacts)
 .claude/
 
-# Installed PowerShell modules (not source code)
+# Installed PowerShell modules and bundled DLLs (not source code)
 Modules/Microsoft.PowerShell.ThreadJob/
+Modules/lib/
 
 # Personal notes and plans
 project docs/

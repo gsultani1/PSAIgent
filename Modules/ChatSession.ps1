@@ -4,7 +4,7 @@
 # ===== Chat Session State =====
 $global:ChatSessionHistory = @()
 $global:ChatSessionName = $null       # Current session name (null = unnamed)
-$global:ChatLogsPath = "$env:USERPROFILE\Documents\ChatLogs"
+$global:ChatLogsPath = "$global:ShelixHome\logs\sessions"
 $global:ChatSessionIndex = @{}        # In-memory index: name -> metadata
 
 # ===== Chat Session Functions =====
@@ -173,6 +173,10 @@ function Start-ChatSession {
                     Write-Host "No active session to rename." -ForegroundColor Yellow
                 }
                 else {
+                    $oldName = $global:ChatSessionName
+                    if ($oldName -and $global:ChatDbReady -and (Get-Command Rename-ChatSessionInDb -ErrorAction SilentlyContinue)) {
+                        Rename-ChatSessionInDb -OldName $oldName -NewName $newName | Out-Null
+                    }
                     Save-Chat -Name $newName
                     Write-Host "Session renamed to: $newName" -ForegroundColor Green
                 }
@@ -207,6 +211,53 @@ function Start-ChatSession {
             }
             '^search\s+(.+)$' {
                 Search-ChatSessions -Keyword $Matches[1]
+                continue
+            }
+            '^(secrets|/secrets)$' {
+                if (Get-Command Invoke-StartupSecretScan -ErrorAction SilentlyContinue) {
+                    Invoke-StartupSecretScan
+                }
+                else { Write-Host 'SecretScanner module not loaded.' -ForegroundColor Red }
+                continue
+            }
+            '^(ocr|/ocr)\s+(.+)$' {
+                $ocrPath = $Matches[2]
+                if (Get-Command Invoke-OCRFile -ErrorAction SilentlyContinue) {
+                    $ocrResult = Invoke-OCRFile -Path $ocrPath
+                    if ($ocrResult -and $ocrResult.Success) {
+                        $global:ChatSessionHistory += @{ role = 'user'; content = "[OCR: extracted text from $ocrPath]" }
+                        $global:ChatSessionHistory += @{ role = 'assistant'; content = $ocrResult.Output }
+                    }
+                }
+                else { Write-Host 'OCRTools module not loaded.' -ForegroundColor Red }
+                continue
+            }
+            '^(heartbeat|/heartbeat)$' {
+                if (Get-Command Get-HeartbeatStatus -ErrorAction SilentlyContinue) { Get-HeartbeatStatus }
+                else { Write-Host 'AgentHeartbeat module not loaded.' -ForegroundColor Red }
+                continue
+            }
+            '^(heartbeat|/heartbeat)\s+list$' {
+                if (Get-Command Show-AgentTaskList -ErrorAction SilentlyContinue) { Show-AgentTaskList }
+                else { Write-Host 'AgentHeartbeat module not loaded.' -ForegroundColor Red }
+                continue
+            }
+            '^(heartbeat|/heartbeat)\s+add\s+"([^"]+)"\s*(.*)$' {
+                if (Get-Command Add-AgentTask -ErrorAction SilentlyContinue) {
+                    $taskDesc = $Matches[2]
+                    $taskId = ($taskDesc -replace '[^a-zA-Z0-9]', '-').Trim('-').Substring(0, [math]::Min(30, $taskDesc.Length))
+                    $extraArgs = $Matches[3]
+                    $schedule = 'daily'; $time = '08:00'
+                    if ($extraArgs -match 'weekly') { $schedule = 'weekly' }
+                    if ($extraArgs -match '(\d{1,2}:\d{2})') { $time = $Matches[1] }
+                    Add-AgentTask -Id $taskId -Task $taskDesc -Schedule $schedule -Time $time
+                }
+                else { Write-Host 'AgentHeartbeat module not loaded.' -ForegroundColor Red }
+                continue
+            }
+            '^(heartbeat|/heartbeat)\s+stop$' {
+                if (Get-Command Unregister-AgentHeartbeat -ErrorAction SilentlyContinue) { Unregister-AgentHeartbeat }
+                else { Write-Host 'AgentHeartbeat module not loaded.' -ForegroundColor Red }
                 continue
             }
             '^delete\s+(.+)$' {
@@ -605,7 +656,7 @@ function Save-Chat {
     
     $session | ConvertTo-Json -Depth 10 | Set-Content $filePath -Encoding UTF8
     
-    # Update index
+    # Update index (JSON fallback)
     $index = Read-ChatIndex
     $index[$global:ChatSessionName] = @{
         file     = $filename
@@ -614,6 +665,11 @@ function Save-Chat {
         preview  = ($global:ChatSessionHistory | Where-Object { $_.role -eq 'user' } | Select-Object -First 1).content
     }
     Write-ChatIndex $index
+    
+    # Save to SQLite (primary storage)
+    if ($global:ChatDbReady -and (Get-Command Save-ChatToDb -ErrorAction SilentlyContinue)) {
+        Save-ChatToDb -Name $global:ChatSessionName -Messages $global:ChatSessionHistory -Provider $global:DefaultChatProvider -Model $session.model | Out-Null
+    }
     
     # Prune logs older than 30 days
     Get-ChildItem $global:ChatLogsPath -Filter "*.json" -ErrorAction SilentlyContinue |
@@ -640,9 +696,57 @@ function Resume-Chat {
     <#
     .SYNOPSIS
     Load the most recent saved session, or a named session. Returns session metadata.
+    Tries SQLite first, falls back to JSON index.
     #>
     param([string]$Name)
     
+    # Try SQLite first
+    if ($global:ChatDbReady -and (Get-Command Resume-ChatFromDb -ErrorAction SilentlyContinue)) {
+        $dbSession = Resume-ChatFromDb -Name $Name
+        if ($dbSession) {
+            $global:ChatSessionHistory = @($dbSession.Messages)
+            $global:ChatSessionName = $dbSession.Name
+            return @{
+                name     = $dbSession.Name
+                messages = $dbSession.Messages.Count
+                source   = 'sqlite'
+            }
+        }
+        # If Name was provided and not found in DB, try partial match
+        if ($Name) {
+            $dbSessions = Get-ChatSessionsFromDb -NameFilter $Name -Limit 1
+            if ($dbSessions.Count -gt 0) {
+                $dbSession = Resume-ChatFromDb -Name $dbSessions[0].Name
+                if ($dbSession) {
+                    $global:ChatSessionHistory = @($dbSession.Messages)
+                    $global:ChatSessionName = $dbSession.Name
+                    return @{
+                        name     = $dbSession.Name
+                        messages = $dbSession.Messages.Count
+                        source   = 'sqlite'
+                    }
+                }
+            }
+        }
+        # If no name given, get most recent from DB
+        if (-not $Name) {
+            $dbSessions = Get-ChatSessionsFromDb -Limit 1
+            if ($dbSessions.Count -gt 0) {
+                $dbSession = Resume-ChatFromDb -Name $dbSessions[0].Name
+                if ($dbSession) {
+                    $global:ChatSessionHistory = @($dbSession.Messages)
+                    $global:ChatSessionName = $dbSession.Name
+                    return @{
+                        name     = $dbSession.Name
+                        messages = $dbSession.Messages.Count
+                        source   = 'sqlite'
+                    }
+                }
+            }
+        }
+    }
+
+    # JSON fallback
     Initialize-ChatLogs
     $index = Read-ChatIndex
     
@@ -692,7 +796,27 @@ function Get-ChatSessions {
     <#
     .SYNOPSIS
     List all saved chat sessions with preview of first message.
+    Uses SQLite if available, otherwise falls back to JSON index.
     #>
+
+    # Try SQLite first
+    if ($global:ChatDbReady -and (Get-Command Get-ChatSessionsFromDb -ErrorAction SilentlyContinue)) {
+        $dbSessions = Get-ChatSessionsFromDb -Limit 50
+        if ($dbSessions.Count -gt 0) {
+            Write-Host "`n===== Saved Sessions (SQLite) =====" -ForegroundColor Cyan
+            foreach ($s in $dbSessions) {
+                $date = try { [datetime]::Parse($s.UpdatedAt).ToString('MMM dd HH:mm') } catch { $s.UpdatedAt }
+                Write-Host "  $($s.Name) " -ForegroundColor Yellow -NoNewline
+                Write-Host "[$($s.MessageCount) msgs, $date]" -ForegroundColor DarkGray
+            }
+            Write-Host ""
+            Write-Host '  resume <name>  to load a session' -ForegroundColor DarkGray
+            Write-Host ""
+            return
+        }
+    }
+
+    # JSON fallback
     Initialize-ChatLogs
     $index = Read-ChatIndex
     
@@ -782,10 +906,33 @@ function Get-SessionSummary {
 function Search-ChatSessions {
     <#
     .SYNOPSIS
-    Search across all saved sessions by keyword.
+    Search across all saved sessions by keyword. Uses FTS5 if SQLite is available.
     #>
     param([Parameter(Mandatory = $true)][string]$Keyword)
     
+    # Try FTS5 search first
+    if ($global:ChatDbReady -and (Get-Command Search-ChatFTS -ErrorAction SilentlyContinue)) {
+        $results = Search-ChatFTS -Query $Keyword -Limit 20
+        if ($results.Count -gt 0) {
+            Write-Host "`nFTS5 search results for '$Keyword':" -ForegroundColor Cyan
+            $currentSession = ''
+            foreach ($r in $results) {
+                if ($r.SessionName -ne $currentSession) {
+                    $currentSession = $r.SessionName
+                    Write-Host "`n  $($r.SessionName)" -ForegroundColor Yellow
+                }
+                $roleColor = if ($r.Role -eq 'user') { 'Gray' } else { 'DarkCyan' }
+                Write-Host "    [$($r.Role)] $($r.Snippet)" -ForegroundColor $roleColor
+            }
+            Write-Host ""
+            return
+        }
+        # If FTS5 returned nothing, it means no match -- don't fall through to JSON
+        Write-Host "No sessions matching '$Keyword'." -ForegroundColor Yellow
+        return
+    }
+
+    # JSON fallback
     Initialize-ChatLogs
     $index = Read-ChatIndex
     $found = @()
@@ -835,29 +982,35 @@ function Search-ChatSessions {
 function Remove-ChatSession {
     <#
     .SYNOPSIS
-    Remove a saved session from index and disk.
+    Remove a saved session from SQLite and/or JSON index.
     #>
     param([Parameter(Mandatory = $true)][string]$Name)
     
+    $removed = $false
+
+    # Remove from SQLite
+    if ($global:ChatDbReady -and (Get-Command Remove-ChatSessionFromDb -ErrorAction SilentlyContinue)) {
+        if (Remove-ChatSessionFromDb -Name $Name) { $removed = $true }
+    }
+
+    # Remove from JSON index
     Initialize-ChatLogs
     $index = Read-ChatIndex
-    
-    if (-not $index.ContainsKey($Name)) {
-        Write-Host "Session '$Name' not found." -ForegroundColor Yellow
-        return
+    if ($index.ContainsKey($Name)) {
+        $entry = $index[$Name]
+        $filePath = Join-Path $global:ChatLogsPath $entry.file
+        if (Test-Path $filePath) { Remove-Item $filePath -Force }
+        $index.Remove($Name)
+        Write-ChatIndex $index
+        $removed = $true
     }
-    
-    $entry = $index[$Name]
-    $filePath = Join-Path $global:ChatLogsPath $entry.file
-    
-    # Remove file
-    if (Test-Path $filePath) { Remove-Item $filePath -Force }
-    
-    # Remove from index
-    $index.Remove($Name)
-    Write-ChatIndex $index
-    
-    Write-Host "Deleted session: $Name" -ForegroundColor Green
+
+    if ($removed) {
+        Write-Host "Deleted session: $Name" -ForegroundColor Green
+    }
+    else {
+        Write-Host "Session '$Name' not found." -ForegroundColor Yellow
+    }
 }
 
 function Export-ChatSession {
@@ -971,10 +1124,8 @@ Set-Alias chat-anthropic Start-ChatAnthropic -Force
 Set-Alias chat-local Start-ChatLocal -Force
 Set-Alias chat-llm Start-ChatLLM -Force
 
-# ===== SQLite Storage Layer (Phase 3 stub) =====
-# Future: Replace JSON files with SQLite for portable storage and FTS5 full-text search.
-# Schema: sessions(id, name, created, updated, provider, model), messages(session_id, role, content, timestamp)
-# Migration: On first run, import existing JSON sessions into SQLite.
-# This enables RAG-ready conversation history -- embeddings can be stored alongside messages.
+# ===== SQLite Storage Layer =====
+# Active: ChatStorage.ps1 provides SQLite + FTS5 persistence.
+# JSON files maintained as fallback and for backward compatibility.
 
 Write-Verbose "ChatSession loaded: Start-ChatSession, chat, Save-Chat, Resume-Chat, Get-ChatSessions, Search-ChatSessions, Export-ChatSession"

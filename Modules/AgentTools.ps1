@@ -526,6 +526,64 @@ Register-AgentTool -Name 'screenshot' `
         }
     }
 
+# --- ocr (text extraction from images/PDFs) ---
+Register-AgentTool -Name 'ocr' `
+    -Description 'Extract text from an image or PDF file using Tesseract OCR.' `
+    -Parameters @(
+        @{ Name = 'path'; Required = $true; Description = 'Path to the image or PDF file' }
+        @{ Name = 'language'; Required = $false; Description = 'Tesseract language code (default: eng)' }
+    ) `
+    -Execute {
+        param($p)
+        $filePath = $p['path']
+        if (-not $filePath) {
+            return @{ Success = $false; Output = 'path parameter is required' }
+        }
+        if (-not (Test-Path $filePath)) {
+            return @{ Success = $false; Output = "File not found: $filePath" }
+        }
+        $lang = if ($p['language']) { $p['language'] } else { 'eng' }
+        $ext = [System.IO.Path]::GetExtension($filePath).ToLower()
+        if ($ext -eq '.pdf') {
+            if (Get-Command ConvertFrom-PDF -ErrorAction SilentlyContinue) {
+                return ConvertFrom-PDF -PdfPath $filePath -Language $lang
+            }
+            return @{ Success = $false; Output = 'OCRTools module not loaded' }
+        }
+        if (Get-Command Invoke-OCR -ErrorAction SilentlyContinue) {
+            return Invoke-OCR -ImagePath $filePath -Language $lang
+        }
+        return @{ Success = $false; Output = 'OCRTools module not loaded' }
+    }
+
+# --- search_history (chat history FTS5 search) ---
+Register-AgentTool -Name 'search_history' `
+    -Description 'Search past chat conversations using full-text search. Returns matching snippets with session names.' `
+    -Parameters @(
+        @{ Name = 'query'; Required = $true; Description = 'Search term or phrase to find in chat history' }
+        @{ Name = 'limit'; Required = $false; Description = 'Max results to return (default: 10)' }
+    ) `
+    -Execute {
+        param($p)
+        if (-not $global:ChatDbReady -or -not (Get-Command Search-ChatFTS -ErrorAction SilentlyContinue)) {
+            return @{ Success = $false; Output = 'Chat database not available. ChatStorage module may not be loaded.' }
+        }
+        $query = $p['query']
+        if (-not $query) {
+            return @{ Success = $false; Output = 'query parameter is required' }
+        }
+        $limit = if ($p['limit']) { [int]$p['limit'] } else { 10 }
+        $results = Search-ChatFTS -Query $query -Limit $limit
+        if ($results.Count -eq 0) {
+            return @{ Success = $true; Output = "No results found for '$query'" }
+        }
+        $output = "Found $($results.Count) result(s) for '$query':`n"
+        foreach ($r in $results) {
+            $output += "`n[$($r.SessionName)] ($($r.Role)): $($r.Snippet)"
+        }
+        return @{ Success = $true; Output = $output }
+    }
+
 # ===== Aliases =====
 Set-Alias agent-tools Get-AgentTools -Force
 

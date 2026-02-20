@@ -1,0 +1,91 @@
+TOPIC
+    about_Shelix
+
+SHORT DESCRIPTION
+    AI-powered shell orchestrator with 80+ intents, autonomous agent, vision,
+    OCR, SQLite RAG, and a plugin system for PowerShell 7+.
+
+LONG DESCRIPTION
+    Shelix transforms your PowerShell terminal into an AI-augmented workspace.
+    It connects to local (Ollama, LM Studio) and cloud (Anthropic, OpenAI) LLMs
+    and provides:
+
+    - Interactive chat sessions with persistent history (SQLite + FTS5)
+    - 80+ intent actions for file management, system ops, git, documents, etc.
+    - Autonomous agent loop with tool use and working memory
+    - Vision model support (screenshot analysis, image description)
+    - Tesseract OCR fallback for non-vision models
+    - Cron-triggered agent heartbeat for scheduled tasks
+    - Secret scanner to detect exposed API keys at startup
+    - Drop-in plugin system with hot-reload
+    - User-defined skills and persistent aliases
+    - MCP (Model Context Protocol) server integration
+    - Natural language to command translation
+    - Code artifact extraction and management
+    - FZF integration for fuzzy finding
+
+GETTING STARTED
+    1. Run Install-Shelix to initialize directories and copy example configs.
+    2. Edit ~/.shelix/config/.env with your API keys.
+    3. Edit ~/.shelix/config/ChatConfig.json with provider settings.
+    4. Start a chat session: chat (or cc)
+    5. Type 'tips' for a quick reference of available commands.
+
+CHAT COMMANDS
+    Inside a chat session, the following slash commands are available:
+
+    save [name]     Save the current session
+    resume          Resume a previous session
+    sessions        List all saved sessions
+    search <term>   Full-text search across all sessions
+    delete <name>   Delete a saved session
+    export          Export current session as Markdown
+    rename <name>   Rename the current session
+    tokens          Show token usage breakdown
+    switch <prov>   Switch chat provider mid-session
+    model <name>    Switch model mid-session
+    folder          Show folder context
+    agent <task>    Run an autonomous agent task
+    vision [path]   Analyze an image or screenshot
+    ocr <path>      Extract text via Tesseract OCR
+    secrets         Run secret scanner
+    heartbeat       Show heartbeat task status
+    clear           Clear session memory
+    exit            End the session
+
+AGENT TOOLS
+    The autonomous agent has access to registered tools. List them with:
+        Get-AgentTools  (or: agent-tools)
+
+    Built-in tools include: calculator, datetime, web_search, fetch_url,
+    wikipedia, stock_quote, json_parse, regex_match, read_file, shell,
+    store, recall, screenshot, ocr, search_history.
+
+PLUGINS
+    Drop .ps1 files into ~/.shelix/plugins/ to extend Shelix. Plugins can
+    register new intents, agent tools, and workflows.
+
+    See: New-ShelixPlugin -Name MyPlugin  to scaffold a template.
+    See: Get-ShelixPlugins  (or: plugins) to list loaded plugins.
+
+CONFIGURATION
+    User data lives under ~/.shelix/:
+        config/     .env, ChatConfig.json, ToolPreferences.json
+        data/       shelix.db (SQLite), NaturalLanguageMappings.json
+        logs/       sessions/, heartbeat.log, AIExecutionLog.json
+        plugins/    User plugins
+        skills/     UserSkills.json
+        aliases/    UserAliases.ps1
+
+TROUBLESHOOTING
+    - Run Test-ChatProvider to verify LLM connectivity.
+    - Run Get-ToolHealthReport (or: health) to check external tool deps.
+    - Run secrets to scan for exposed API keys.
+    - Set $global:DebugModuleLoading = $true before loading to see errors.
+
+SEE ALSO
+    Start-ChatSession
+    Invoke-AgentTask
+    Register-AgentTool
+    Show-ProfileTips
+    Install-Shelix

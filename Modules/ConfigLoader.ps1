@@ -2,8 +2,8 @@
 # Loads API keys and configuration from Config/.env file
 # Like Python's dotenv but for PowerShell
 
-$global:ConfigPath = "$PSScriptRoot\..\Config"
-$global:EnvFilePath = "$global:ConfigPath\.env"
+$global:ConfigPath = "$global:ShelixHome\config"
+$global:EnvFilePath = "$global:ShelixHome\config\.env"
 
 function Import-EnvFile {
     <#

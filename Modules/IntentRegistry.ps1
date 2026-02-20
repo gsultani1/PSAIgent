@@ -476,6 +476,14 @@ $global:IntentMetadata = @{
             @{ Name = 'full'; Required = $false; Description = 'Set to true to send at full resolution' }
         )
     }
+    'ocr_file'                  = @{
+        Category    = 'vision'
+        Description = 'Extract text from an image or PDF using Tesseract OCR'
+        Parameters  = @(
+            @{ Name = 'path'; Required = $true; Description = 'Path to image or PDF file' }
+            @{ Name = 'language'; Required = $false; Description = 'Tesseract language code (default: eng)' }
+        )
+    }
 }
 
 # ===== Generate IntentCategories from IntentMetadata (single source of truth) =====
