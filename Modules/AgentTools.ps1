@@ -556,6 +556,29 @@ Register-AgentTool -Name 'ocr' `
         return @{ Success = $false; Output = 'OCRTools module not loaded' }
     }
 
+# --- build_app (prompt-to-executable) ---
+Register-AgentTool -Name 'build_app' `
+    -Description 'Build a standalone Windows .exe from a natural language app description. Supports powershell (default), python-tk, python-web frameworks.' `
+    -Parameters @(
+        @{ Name = 'prompt'; Required = $true; Description = 'Natural language description of the app to build' }
+        @{ Name = 'framework'; Required = $false; Description = 'powershell (default), python-tk, or python-web' }
+        @{ Name = 'name'; Required = $false; Description = 'App name for the executable' }
+    ) `
+    -Execute {
+        param($p)
+        $prompt = $p['prompt']
+        if (-not $prompt) {
+            return @{ Success = $false; Output = 'prompt parameter is required' }
+        }
+        if (-not (Get-Command New-AppBuild -ErrorAction SilentlyContinue)) {
+            return @{ Success = $false; Output = 'AppBuilder module not loaded' }
+        }
+        $buildParams = @{ Prompt = $prompt }
+        if ($p['framework']) { $buildParams.Framework = $p['framework'] }
+        if ($p['name']) { $buildParams.Name = $p['name'] }
+        return New-AppBuild @buildParams
+    }
+
 # --- search_history (chat history FTS5 search) ---
 Register-AgentTool -Name 'search_history' `
     -Description 'Search past chat conversations using full-text search. Returns matching snippets with session names.' `

@@ -62,6 +62,7 @@ if (Test-Path $global:ModulesPath) {
     . "$global:ModulesPath\VisionTools.ps1"
     . "$global:ModulesPath\OCRTools.ps1"
     . "$global:ModulesPath\CodeArtifacts.ps1"
+    . "$global:ModulesPath\AppBuilder.ps1"
 
     # User experience
     . "$global:ModulesPath\FzfIntegration.ps1"

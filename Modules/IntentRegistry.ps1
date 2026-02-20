@@ -484,6 +484,15 @@ $global:IntentMetadata = @{
             @{ Name = 'language'; Required = $false; Description = 'Tesseract language code (default: eng)' }
         )
     }
+    'build_app'                 = @{
+        Category    = 'productivity'
+        Description = 'Build a standalone .exe from a natural language app description'
+        Parameters  = @(
+            @{ Name = 'prompt'; Required = $true; Description = 'Natural language description of the app' }
+            @{ Name = 'framework'; Required = $false; Description = 'powershell (default), python-tk, python-web' }
+            @{ Name = 'name'; Required = $false; Description = 'App name for the executable' }
+        )
+    }
 }
 
 # ===== Generate IntentCategories from IntentMetadata (single source of truth) =====

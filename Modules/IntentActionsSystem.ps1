@@ -1026,6 +1026,23 @@ try {
         return @{ Success = $false; Output = "OCRTools module not loaded"; Error = $true }
     }
 
+    # ===== App Builder =====
+    "build_app"                 = {
+        $prompt = $args[0]
+        $framework = if ($args.Count -gt 1) { $args[1] } else { $null }
+        $name = if ($args.Count -gt 2) { $args[2] } else { $null }
+        if (-not $prompt) {
+            return @{ Success = $false; Output = "Usage: build_app <prompt> [framework] [name]"; Error = $true }
+        }
+        if (Get-Command New-AppBuild -ErrorAction SilentlyContinue) {
+            $buildParams = @{ Prompt = $prompt }
+            if ($framework) { $buildParams.Framework = $framework }
+            if ($name) { $buildParams.Name = $name }
+            return New-AppBuild @buildParams
+        }
+        return @{ Success = $false; Output = "AppBuilder module not loaded"; Error = $true }
+    }
+
 }
 
 Write-Verbose "IntentActionsSystem loaded: apps, workflows, system, filesystem, agent intents added"

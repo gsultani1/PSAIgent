@@ -189,6 +189,7 @@ if (Test-Path $global:ModulesPath) {
     . "$global:ModulesPath\VisionTools.ps1"        # Vision model support (screenshot, image analysis)
     . "$global:ModulesPath\OCRTools.ps1"           # Tesseract OCR + pdftotext integration
     . "$global:ModulesPath\CodeArtifacts.ps1"      # AI code generation artifacts
+    . "$global:ModulesPath\AppBuilder.ps1"        # Prompt-to-executable pipeline
 
     # User experience
     . "$global:ModulesPath\FzfIntegration.ps1"     # Fuzzy finder

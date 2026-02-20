@@ -260,6 +260,36 @@ function Start-ChatSession {
                 else { Write-Host 'AgentHeartbeat module not loaded.' -ForegroundColor Red }
                 continue
             }
+            '^(build|/build)\s+(-tokens\s+\d+\s+)?(-nobranding\s+)?(python-tk\s+|python-web\s+|powershell\s+)?"(.+)"$' {
+                if (Get-Command New-AppBuild -ErrorAction SilentlyContinue) {
+                    $buildParams = @{ Prompt = $Matches[5] }
+                    if ($Matches[4]) { $buildParams.Framework = $Matches[4].Trim() }
+                    if ($Matches[2] -match '(\d+)') { $buildParams.MaxTokens = [int]$Matches[1] }
+                    if ($Matches[3]) { $buildParams.NoBranding = $true }
+                    New-AppBuild @buildParams
+                }
+                else { Write-Host 'AppBuilder module not loaded.' -ForegroundColor Red }
+                continue
+            }
+            '^(build|/build)\s+"(.+)"$' {
+                if (Get-Command New-AppBuild -ErrorAction SilentlyContinue) {
+                    New-AppBuild -Prompt $Matches[2]
+                }
+                else { Write-Host 'AppBuilder module not loaded.' -ForegroundColor Red }
+                continue
+            }
+            '^(builds|/builds)$' {
+                if (Get-Command Get-AppBuilds -ErrorAction SilentlyContinue) { Get-AppBuilds }
+                else { Write-Host 'AppBuilder module not loaded.' -ForegroundColor Red }
+                continue
+            }
+            '^(rebuild|/rebuild)\s+(\S+)\s+"(.+)"$' {
+                if (Get-Command Update-AppBuild -ErrorAction SilentlyContinue) {
+                    Update-AppBuild -Name $Matches[2] -Changes $Matches[3]
+                }
+                else { Write-Host 'AppBuilder module not loaded.' -ForegroundColor Red }
+                continue
+            }
             '^delete\s+(.+)$' {
                 $delName = $Matches[1]
                 Write-Host "Delete session '$delName'? (y/N): " -ForegroundColor Yellow -NoNewline

@@ -48,6 +48,11 @@
         'Invoke-OCR', 'Invoke-OCRFile', 'ConvertFrom-PDF',
         'Send-ImageToAIWithFallback', 'Test-OCRAvailable', 'Test-PdftotextAvailable',
 
+        # App Builder
+        'New-AppBuild', 'Update-AppBuild', 'Get-AppBuilds', 'Remove-AppBuild',
+        'Get-BuildFramework', 'Get-BuildMaxTokens', 'Test-GeneratedCode',
+        'Build-PowerShellExecutable', 'Build-PythonExecutable',
+
         # Config
         'Import-EnvFile', 'Get-ConfigValue', 'Set-ConfigValue',
 
@@ -134,7 +139,7 @@
         'chat-models', 'chat-test', 'providers',
         'agent', 'agent-stop', 'agent-steps', 'agent-memory', 'agent-plan', 'agent-tools',
         'heartbeat', 'heartbeat-tasks',
-        'vision', 'ocr',
+        'vision', 'ocr', 'builds', 'rebuild',
         'secrets', 'scan-secrets',
         'workflow', 'workflows',
         'plugins', 'new-plugin', 'test-plugin', 'watch-plugins', 'plugin-config',
