@@ -15,6 +15,8 @@ Today it does things like:
 - **"Search the web for PowerShell async patterns and save the results"** → searches, fetches, creates a notes doc
 - **"Schedule the daily standup workflow to run every morning at 8am"** → registers a Windows Task Scheduler job
 - **"What's in this folder?"** → reads your directory structure, git state, and notable files into the AI's context
+- **"Deploy staging"** → runs a user-defined skill (JSON config, no code) that chains git commands + intents
+- **Plugins** → drop a `.ps1` file into `Plugins/` and it registers new intents, categories, and workflows automatically
 
 All of it runs locally. Nothing phones home. The AI can only run commands you've explicitly whitelisted.
 
@@ -28,19 +30,22 @@ The long-term vision is **mission control for your entire computer** — an AI l
 
 ### The layers, in order:
 
-**1. Shell orchestrator** *(today)*
-The AI understands your terminal context — current directory, git state, running processes, file structure — and can execute actions through a safety-gated intent system.
+**1. Shell orchestrator** *(✅ complete)*
+The AI understands your terminal context — current directory, git state, running processes, file structure — and can execute actions through a safety-gated intent system with 30+ built-in intents.
 
-**2. Context engine** *(in progress)*
-Persistent memory across sessions. The AI recalls what you worked on yesterday, what files you've touched, what decisions you made. Conversation history stored locally, searchable, RAG-ready.
+**2. Extensibility layer** *(✅ complete)*
+Drop-in plugin architecture with dependency resolution, per-plugin configuration, lifecycle hooks, self-tests, and hot-reload. User-defined skills via JSON config for non-programmers. Community contributions without merge conflicts.
 
-**3. Computer awareness** *(next)*
-Browser tab awareness. OCR for documents and screenshots. Vision model support for multimodal input. The AI sees what you see.
+**3. Context engine** *(✅ complete)*
+Persistent memory across sessions. The AI recalls what you worked on yesterday, what files you've touched, what decisions you made. Conversation history stored locally, searchable. Token budget management with intelligent context trimming.
 
-**4. Agent architecture** *(planned)*
+**4. Computer awareness** *(next)*
+Vision model support for screenshots and images. Browser tab awareness. OCR for documents and scanned PDFs. The AI sees what you see.
+
+**5. Agent architecture** *(planned)*
 Dynamic multi-step task planning. Instead of predefined workflows, the AI reasons about what tools to use in what order. "Analyze the invoices in this folder, flag anything overdue, and create a summary doc" becomes one command.
 
-**5. Mission control GUI** *(future)*
+**6. Mission control GUI** *(future)*
 A dashboard layer over the shell. Not a replacement — an amplifier. The terminal stays the engine; the GUI surfaces context, history, running tasks, and agent state in a way that's faster to scan than a command line.
 
 ---
@@ -53,7 +58,7 @@ A dashboard layer over the shell. Not a replacement — an amplifier. The termin
 
 **Shell as the foundation.** The terminal isn't a legacy interface to be replaced. It's the most powerful general-purpose computer interface ever built. Shelix extends it rather than abstracting it away.
 
-**Modular by design.** Every capability is a drop-in module. Adding a new intent, provider, or tool doesn't require touching core code. The plugin architecture (coming) makes this explicit.
+**Modular by design.** Every capability is a drop-in module. Adding a new intent, provider, or tool doesn't require touching core code. The plugin architecture makes this explicit — drop a `.ps1` file in `Plugins/` or add a skill to `UserSkills.json` and it's live.
 
 **Open.** MIT licensed. The goal is a community of people building their own intents, workflows, and integrations on top of a shared foundation.
 
@@ -88,10 +93,11 @@ Shelix is different on all five:
 See [CONTRIBUTING.md](CONTRIBUTING.md) for how to add intents, providers, and modules.
 
 The highest-leverage contributions right now:
-- New intents for common developer workflows
-- Provider integrations (new LLM APIs, local model formats)
-- Cross-platform testing (macOS/Linux via PS 7)
-- The plugin architecture design
+- **Plugins** — Drop `.ps1` files into `Plugins/` with `$PluginIntents`, config, hooks, and tests
+- **User skills** — Add JSON-defined command sequences to `UserSkills.json`
+- **Provider integrations** — New LLM APIs, local model formats
+- **Cross-platform testing** — macOS/Linux via PowerShell 7
+- **Vision + OCR** — Multimodal model support, Tesseract integration
 
 ---
 

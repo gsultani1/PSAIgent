@@ -272,6 +272,11 @@ function Start-ChatSession {
             '^\s*$' { continue }
         }
 
+        # Check for artifact commands (code, save <#>, run <#>, save-all)
+        if (Get-Command Invoke-ArtifactFromChat -ErrorAction SilentlyContinue) {
+            if (Invoke-ArtifactFromChat -InputText $inputText) { continue }
+        }
+
         if (-not $continue) { break }
 
         # Don't preprocess user input - let the AI interpret naturally
@@ -326,6 +331,11 @@ function Start-ChatSession {
                 $parsedReply = Convert-JsonIntent $reply
             }
             
+            # Detect and track code artifacts in the response
+            if (Get-Command Register-ArtifactsFromResponse -ErrorAction SilentlyContinue) {
+                Register-ArtifactsFromResponse -ResponseText $reply
+            }
+
             # Show token usage if available
             if ($response.Usage) {
                 $totalTokens = $response.Usage.total_tokens

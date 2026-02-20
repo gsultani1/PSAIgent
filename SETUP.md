@@ -113,10 +113,14 @@ chat -Provider ollama -Model llama3.2 -Stream
 
 | Command | Action |
 |---------|--------|
-| `exit` | End session |
-| `clear` | Reset conversation |
-| `save` | Save to JSON |
-| `tokens` | Show token count |
+| `exit` | End session (auto-saves) |
+| `clear` | Reset conversation (saves previous) |
+| `save` / `save <name>` | Save session |
+| `resume` / `resume <name>` | Load a saved session |
+| `sessions` | Browse all saved sessions |
+| `search <keyword>` | Search across sessions |
+| `budget` | Show token usage breakdown |
+| `folder` | Inject current directory context |
 | `switch <provider>` | Change provider |
 | `model <name>` | Change model |
 
@@ -134,22 +138,25 @@ All executions are logged and require confirmation for non-read-only commands.
 ## File Structure
 
 ```
-WindowsPowerShell/
-├── Microsoft.PowerShell_profile.ps1  # Main profile (~150 lines)
+Shelix/
+├── Microsoft.PowerShell_profile.ps1  # Main profile (loads modules)
 ├── ChatConfig.json                    # API keys & settings
 ├── NaturalLanguageMappings.json       # Command translations
+├── UserSkills.json                    # Your custom intents (JSON)
 ├── UserAliases.ps1                    # Your custom aliases
-└── Modules/                           # 24 focused modules
-    ├── ConfigLoader.ps1               # Config & .env loading
-    ├── CommandValidation.ps1          # Command whitelist
-    ├── AIExecution.ps1                # AI command gateway
-    ├── ChatSession.ps1                # Chat loop
-    ├── ChatProviders.ps1              # LLM backends
-    ├── IntentAliasSystem.ps1          # Intent actions
-    ├── SystemUtilities.ps1            # sudo, ports, uptime
-    ├── DockerTools.ps1                # Docker shortcuts
-    ├── DevTools.ps1                   # IDE launchers
-    └── ...                            # See README for full list
+├── Modules/                           # 25+ focused modules
+│   ├── IntentAliasSystem.ps1          # Intent routing (30+ intents)
+│   ├── UserSkills.ps1                 # JSON user skill loader
+│   ├── PluginLoader.ps1              # Plugin system (deps, config, hooks, tests)
+│   ├── ChatSession.ps1                # Chat loop + session persistence
+│   ├── ChatProviders.ps1              # LLM backends
+│   ├── FolderContext.ps1              # Folder awareness for AI
+│   ├── ToastNotifications.ps1         # BurntToast/.NET alerts
+│   └── ...                            # See README for full list
+└── Plugins/                           # Drop-in plugin directory
+    ├── _Example.ps1                   # Reference template
+    ├── _Pomodoro.ps1                  # Timer plugin
+    └── _QuickNotes.ps1                # Note-taking plugin
 ```
 
 ---
@@ -218,18 +225,31 @@ zsh-help          # Zsh/Oh-My-Zsh to PowerShell guide
 ## Quick Reference
 
 ```powershell
+# General
 tips              # Show all commands
 providers         # Show chat providers
 intent-help       # Show AI intents
 actions           # Show safe commands
 tools             # Show terminal tools
 health            # Tool health check
-install-tools     # Install missing tools
-bash-help         # Bash migration guide
-zsh-help          # Zsh migration guide
-session-info      # Show current session
 profile-timing    # Show load performance
+
+# Plugins
+plugins           # List active & disabled plugins
+new-plugin 'Name' # Scaffold a new plugin
+test-plugin -All  # Run plugin self-tests
+watch-plugins     # Auto-reload on file save
+plugin-config X   # View plugin configuration
+
+# User Skills
+skills            # List user-defined skills
+new-skill 'Name'  # Create a skill interactively
+reload-skills     # Reload from UserSkills.json
+
+# Workflows & Sessions
 workflows         # List available workflows
+session-info      # Show current session
+sessions          # Browse saved sessions
 ```
 
 ---

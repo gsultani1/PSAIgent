@@ -75,6 +75,30 @@ function Show-ProfileTips {
     Write-Host "  Enable-ShelixPlugin [name]  - Activate a disabled plugin" -ForegroundColor White
     Write-Host "  Disable-ShelixPlugin [name] - Deactivate a loaded plugin" -ForegroundColor White
     Write-Host "  reload-plugins              - Reload all plugins" -ForegroundColor White
+    Write-Host "  test-plugin -Name [name]    - Run plugin self-tests" -ForegroundColor White
+    Write-Host "  test-plugin -All            - Test all plugins" -ForegroundColor White
+    Write-Host "  plugin-config [name]        - View plugin configuration" -ForegroundColor White
+    Write-Host "  Set-PluginConfig [p] [k] [v]- Set a plugin config value" -ForegroundColor White
+    Write-Host "  Reset-PluginConfig [name]   - Reset config to defaults" -ForegroundColor White
+    Write-Host "  watch-plugins               - Auto-reload on file change" -ForegroundColor White
+
+    Write-Host "`nBrowser Awareness:" -ForegroundColor Yellow
+    Write-Host "  browser-url                 - Get active browser tab URL" -ForegroundColor White
+    Write-Host "  browser-page                - Fetch page content from active tab" -ForegroundColor White
+    Write-Host "  browser-tabs                - List all open browser windows" -ForegroundColor White
+
+    Write-Host "`nCode Artifacts:" -ForegroundColor Yellow
+    Write-Host "  code                        - List code blocks from last AI response" -ForegroundColor White
+    Write-Host "  save <#> [path]             - Save a code block to a file" -ForegroundColor White
+    Write-Host "  run <#>                     - Execute a code block" -ForegroundColor White
+    Write-Host "  save-all [dir]              - Save all code blocks" -ForegroundColor White
+    Write-Host "  artifacts                   - List saved artifact files" -ForegroundColor White
+
+    Write-Host "`nUser Skills:" -ForegroundColor Yellow
+    Write-Host "  skills                      - List user-defined skills" -ForegroundColor White
+    Write-Host "  new-skill [name]            - Create a new skill interactively" -ForegroundColor White
+    Write-Host "  Remove-UserSkill [name]     - Delete a user skill" -ForegroundColor White
+    Write-Host "  reload-skills               - Reload skills from JSON" -ForegroundColor White
 
     Write-Host "`nModule Management:" -ForegroundColor Yellow
     Write-Host "  reload-all                  - Reload all modules" -ForegroundColor White
@@ -172,6 +196,14 @@ WEB:
 {"intent":"web_search","query":"terms"}
 {"intent":"wikipedia","query":"topic"}
 {"intent":"fetch_url","url":"https://api.example.com"}
+{"intent":"browser_tab"}
+{"intent":"browser_content"}
+
+CODE ARTIFACTS (save and execute generated code):
+{"intent":"save_code","code":"print('hello world')","language":"python","filename":"hello.py"}
+{"intent":"run_code","code":"Get-Process | Select -First 5","language":"powershell"}
+{"intent":"run_code","code":"print(2+2)","language":"python","filename":"math.py"}
+{"intent":"list_artifacts"}
 
 CLIPBOARD:
 {"intent":"clipboard_read"}
@@ -229,6 +261,13 @@ User: "what time is it" -> (just answer, no intent needed)
     
     if ($global:MCPConnections -and $global:MCPConnections.Count -gt 0) {
         $prompt += "`n`n" + (Get-MCPToolsPrompt)
+    }
+
+    if ($global:LoadedUserSkills -and $global:LoadedUserSkills.Count -gt 0) {
+        $skillsPrompt = Get-UserSkillsPrompt
+        if ($skillsPrompt) {
+            $prompt += "`n`n" + $skillsPrompt
+        }
     }
 
     if ($global:LoadedPlugins -and $global:LoadedPlugins.Count -gt 0) {

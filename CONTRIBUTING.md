@@ -117,14 +117,30 @@ Before submitting a PR:
 3. Add to README documentation
 4. Test with `Test-ChatProvider <name>`
 
+### New Intent (via JSON User Skill — easiest)
+1. Copy `UserSkills.example.json` to `UserSkills.json`
+2. Add a skill entry with `description`, `steps` (required), and optionally `parameters`, `triggers`, `confirm`, `category`
+3. Steps can be `{"command": "..."}` for raw PowerShell or `{"intent": "..."}` for existing intents
+4. Use `{paramName}` placeholders in commands/intent params for parameter substitution
+5. Run `reload-skills` to load — skill intents appear in `intent-help`, AI chat, and tab-completion
+6. Use `skills` to list, `new-skill` to create interactively, `Remove-UserSkill` to delete
+
 ### New Intent (via Plugin — recommended)
 1. Run `new-plugin 'MyPlugin'` to scaffold, or create a `.ps1` file in `Plugins/`
 2. Define `$PluginIntents` — a hashtable mapping intent names to scriptblocks (required)
 3. Define `$PluginMetadata` — category, description, parameters (recommended)
-4. Optionally define `$PluginInfo` (version/author), `$PluginCategories`, and `$PluginWorkflows`
+4. Optionally define any of the following:
+   - `$PluginInfo` — version, author, description, `Dependencies`, `MinShelixVersion`, `MaxShelixVersion`
+   - `$PluginCategories` — new intent category definitions
+   - `$PluginWorkflows` — multi-step workflow chains
+   - `$PluginConfig` — per-plugin settings with defaults, persisted to `Plugins/Config/<name>.json`
+   - `$PluginFunctions` — helper scriptblocks shared via `$global:PluginHelpers['Name']['FnName']`
+   - `$PluginHooks` — `OnLoad`/`OnUnload` lifecycle callbacks
+   - `$PluginTests` — self-test scriptblocks, run with `test-plugin -Name 'Name'`
 5. Run `reload-plugins` to load — plugin intents appear in `intent-help`, AI chat, and tab-completion
 6. Use `Enable-ShelixPlugin` / `Disable-ShelixPlugin` to toggle without deleting files
-7. See `Plugins/_Example.ps1` for the full template with all conventions
+7. Use `watch-plugins` during development for automatic hot-reload on file save
+8. See `Plugins/_Example.ps1` for the full template with all conventions
 
 ### New Intent (core)
 1. Add to `$global:IntentAliases` in `IntentAliasSystem.ps1`

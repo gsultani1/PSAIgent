@@ -3,6 +3,7 @@
 # Profile load timing
 $global:ProfileLoadStart = Get-Date
 $global:ProfileTimings = @{}
+$global:ShelixVersion = '1.0.0'
 
 # Safe Mode - report errors but continue loading
 trap {
@@ -54,6 +55,10 @@ if (Test-Path $global:ModulesPath) {
     . "$global:ModulesPath\ProductivityTools.ps1"  # Clipboard, git, calendar
     . "$global:ModulesPath\MCPClient.ps1"          # MCP server integration
     
+    # Context awareness
+    . "$global:ModulesPath\BrowserAwareness.ps1"   # Browser tab awareness
+    . "$global:ModulesPath\CodeArtifacts.ps1"      # AI code generation artifacts
+
     # User experience
     . "$global:ModulesPath\FzfIntegration.ps1"     # Fuzzy finder
     . "$global:ModulesPath\PersistentAliases.ps1"  # User-defined aliases
@@ -69,18 +74,29 @@ if (Test-Path $global:ModulesPath) {
 . "$global:ModulesPath\IntentAliasSystem.ps1"
 . "$global:ModulesPath\ChatProviders.ps1"
 
+# User skills (load AFTER intents so registries exist, BEFORE plugins)
+. "$global:ModulesPath\UserSkills.ps1"
+
 # Plugins (load AFTER core so registries exist for merging)
 . "$global:ModulesPath\PluginLoader.ps1"
 
 # ===== Module Reload Functions =====
 function Update-IntentAliases {
     . "$global:ModulesPath\IntentAliasSystem.ps1" -ErrorAction SilentlyContinue
-    # Re-merge plugins since reloading core wipes the global hashtables
+    # Re-merge user skills and plugins since reloading core wipes the global hashtables
+    $global:LoadedUserSkills = [ordered]@{}
+    Import-UserSkills -Quiet
     $global:LoadedPlugins = [ordered]@{}
     Import-ShelixPlugins -Quiet
-    Write-Host "Intent aliases reloaded (plugins re-merged)." -ForegroundColor Green
+    Write-Host "Intent aliases reloaded (skills + plugins re-merged)." -ForegroundColor Green
 }
 Set-Alias reload-intents Update-IntentAliases -Force
+
+function Update-UserSkills {
+    Unregister-UserSkills
+    Import-UserSkills
+}
+Set-Alias reload-skills Update-UserSkills -Force
 
 function Update-ChatProviders {
     . "$global:ModulesPath\ChatProviders.ps1" -ErrorAction SilentlyContinue

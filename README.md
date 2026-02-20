@@ -26,14 +26,60 @@
 |----------|---------|
 | **Documents** | `create_docx`, `create_xlsx` - Create and open Office documents |
 | **Clipboard** | `clipboard_read`, `clipboard_write`, `clipboard_format_json`, `clipboard_case` |
-| **Files** | `read_file`, `file_stats` - Analyze file contents |
+| **Files** | `read_file`, `file_stats`, `save_code`, `list_artifacts` - Files and code artifacts |
 | **Git** | `git_status`, `git_log`, `git_commit`, `git_push`, `git_pull`, `git_diff` |
 | **Calendar** | `calendar_today`, `calendar_week`, `calendar_create` (Outlook) |
-| **Web** | `web_search`, `wikipedia`, `fetch_url`, `search_web` |
+| **Web** | `web_search`, `wikipedia`, `fetch_url`, `search_web`, `browser_tab`, `browser_content` |
 | **Apps** | `open_word`, `open_excel`, `open_notepad`, `open_folder`, `open_terminal` |
 | **MCP** | `mcp_servers`, `mcp_connect`, `mcp_tools`, `mcp_call` |
 | **Workflows** | `run_workflow`, `list_workflows`, `schedule_workflow`, `list_scheduled_workflows`, `remove_scheduled_workflow` |
-| **System** | `service_restart`, `system_info`, `network_status`, `process_list`, `process_kill` |
+| **System** | `service_restart`, `system_info`, `network_status`, `process_list`, `process_kill`, `run_code` |
+
+### 🧩 Plugin Architecture
+
+Drop `.ps1` files into `Plugins/` to add new intents without touching core code:
+
+```powershell
+plugins                        # List active & disabled plugins
+Enable-ShelixPlugin 'Example'  # Activate a plugin
+new-plugin 'MyPlugin'          # Scaffold from template
+test-plugin -All               # Run plugin self-tests
+watch-plugins                  # Auto-reload on file save
+plugin-config Pomodoro          # View plugin configuration
+```
+
+**Plugin features:** dependency resolution, per-plugin config (`Plugins/Config/*.json`), lifecycle hooks (`OnLoad`/`OnUnload`), self-test framework, helper function sharing, version compatibility checks, hot-reload file watcher.
+
+See `Plugins/_Example.ps1` for the full template.
+
+### 🎯 Custom User Skills
+
+Define your own intents via JSON — no PowerShell required:
+
+```json
+{
+  "skills": {
+    "deploy_staging": {
+      "description": "Pull latest and show status",
+      "parameters": [{"name": "branch", "default": "main"}],
+      "confirm": true,
+      "steps": [
+        {"command": "git checkout {branch}"},
+        {"command": "git pull origin {branch}"},
+        {"intent": "git_status"}
+      ]
+    }
+  }
+}
+```
+
+```powershell
+skills              # List user skills
+new-skill 'name'    # Create interactively
+reload-skills       # Reload from JSON
+```
+
+Copy `UserSkills.example.json` → `UserSkills.json` to get started.
 
 ### 🔄 Multi-Step Workflows
 
@@ -121,10 +167,12 @@ Change the default chat provider in `ChatConfig.json`:
 
 ```
 Shelix/
-├── Microsoft.PowerShell_profile.ps1  # Main profile (~150 lines, loads modules)
+├── Microsoft.PowerShell_profile.ps1  # Main profile (loads modules)
 ├── ChatConfig.json                   # API keys and settings
 ├── ToolPreferences.json              # Tool preferences
 ├── NaturalLanguageMappings.json      # Command mappings
+├── UserSkills.json                   # Custom user-defined intents (your file)
+├── UserSkills.example.json           # Template for user skills
 ├── UserAliases.ps1                   # Your custom persistent aliases
 ├── Modules/
 │   ├── ConfigLoader.ps1              # .env and config loading
@@ -150,9 +198,19 @@ Shelix/
 │   ├── PersistentAliases.ps1         # User-defined aliases
 │   ├── ProfileHelp.ps1               # Help, tips, system prompt
 │   ├── FolderContext.ps1             # Folder awareness for AI context
+│   ├── ToastNotifications.ps1        # BurntToast/.NET notifications
+│   ├── BrowserAwareness.ps1          # Browser tab URL + content reading
+│   ├── CodeArtifacts.ps1             # AI code save + execute + tracking
+│   ├── UserSkills.ps1                # JSON user-defined intent loader
+│   ├── PluginLoader.ps1              # Plugin system (deps, config, hooks, tests)
 │   ├── ChatSession.ps1               # LLM chat loop + session persistence
 │   ├── ChatProviders.ps1             # AI provider implementations
 │   └── IntentAliasSystem.ps1         # Intent routing system
+├── Plugins/
+│   ├── _Example.ps1                  # Reference plugin template
+│   ├── _Pomodoro.ps1                 # Pomodoro timer plugin
+│   ├── _QuickNotes.ps1               # Note-taking plugin
+│   └── Config/                       # Per-plugin configuration overrides
 └── README.md
 ```
 
@@ -270,14 +328,17 @@ See [VISION.md](VISION.md) for the full product direction.
 | ✅ | Folder awareness — AI sees your directory, git state, file structure |
 | ✅ | MCP client — connect to any MCP server |
 | ✅ | Safety system — command whitelist, confirmation prompts, rate limiting |
-| 🔜 | Plugin architecture — drop `.ps1` files to add intents without touching core |
-| 🔜 | Custom user skills — define intents via JSON/YAML, no PowerShell required |
-| 🔜 | Toast notifications — surface alerts and task completions |
+| ✅ | Toast notifications — BurntToast/.NET alerts on task completions |
+| ✅ | Plugin architecture — drop `.ps1` files with deps, config, hooks, tests, hot-reload |
+| ✅ | Custom user skills — define intents via JSON config, no PowerShell required |
+| ✅ | Browser awareness — read active tab URL, fetch page content via UI Automation |
+| ✅ | Code artifacts — save, execute, and track AI-generated code blocks |
 | 🔜 | Vision model support — send screenshots/images directly to Claude/GPT-4o |
 | 🔜 | OCR integration — Tesseract for scanned docs, pdftotext for text PDFs |
-| 🔜 | Browser awareness — read active tab URL, pull page content |
 | 🔜 | Agent architecture — dynamic multi-step planning, not just predefined workflows |
 | 🔜 | RAG + SQLite — full-text search over conversation history, embedding-ready |
+| 🔜 | Browser automation — Selenium WebDriver integration |
+| 🔜 | Remote listener + webhooks — receive commands via Twilio/HTTP |
 | 🔜 | GUI layer — mission control dashboard for your entire computer |
 
 ## License

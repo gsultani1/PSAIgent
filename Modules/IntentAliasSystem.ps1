@@ -208,6 +208,41 @@ $global:IntentMetadata = @{
         Description = 'Fetch content from a URL'
         Parameters  = @(@{ Name = 'url'; Required = $true; Description = 'URL to fetch' })
     }
+    'browser_tab'               = @{
+        Category    = 'web'
+        Description = 'Get the URL and title of the active browser tab'
+        Parameters  = @()
+    }
+    'browser_content'           = @{
+        Category    = 'web'
+        Description = 'Fetch the page content from the active browser tab'
+        Parameters  = @()
+    }
+    # Code Artifacts
+    'save_code'                 = @{
+        Category    = 'file'
+        Description = 'Save AI-generated code to a file'
+        Parameters  = @(
+            @{ Name = 'code'; Required = $true; Description = 'The code to save' }
+            @{ Name = 'filename'; Required = $false; Description = 'Output filename (auto-generated if omitted)' }
+            @{ Name = 'language'; Required = $false; Description = 'Language hint (python, powershell, js, etc.)' }
+        )
+    }
+    'run_code'                  = @{
+        Category    = 'system'
+        Description = 'Execute AI-generated code (saves to temp file and runs)'
+        Safety      = 'RequiresConfirmation'
+        Parameters  = @(
+            @{ Name = 'code'; Required = $true; Description = 'The code to execute' }
+            @{ Name = 'language'; Required = $true; Description = 'Language (powershell, python, js, bash, etc.)' }
+            @{ Name = 'filename'; Required = $false; Description = 'Also save to this filename' }
+        )
+    }
+    'list_artifacts'            = @{
+        Category    = 'file'
+        Description = 'List saved code artifacts'
+        Parameters  = @()
+    }
     # File
     'open_folder'               = @{
         Category    = 'file'
@@ -779,6 +814,66 @@ $global:IntentAliases = @{
         else {
             @{ Success = $false; Output = $result.Message; Error = $true }
         }
+    }
+
+    "browser_tab"               = {
+        # Get the active browser tab URL and title
+        $result = Get-ActiveBrowserTab
+        if ($result.Success) {
+            $info = @("Browser: $($result.Browser)", "Title: $($result.Title)")
+            if ($result.Url) { $info += "URL: $($result.Url)" }
+            $info += "Method: $($result.Method)"
+            @{ Success = $true; Output = ($info -join "`n"); Url = $result.Url; Title = $result.Title; Browser = $result.Browser }
+        }
+        else {
+            @{ Success = $false; Output = $result.Output; Error = $true }
+        }
+    }
+
+    "browser_content"           = {
+        # Fetch the page content from the active browser tab
+        $result = Get-BrowserPageContent -MaxLength 3000
+        if ($result.Success -and $result.Content) {
+            @{ Success = $true; Output = "[$($result.Browser)] $($result.Title)`nURL: $($result.Url)`n`n$($result.Content)"; Url = $result.Url }
+        }
+        elseif ($result.Success) {
+            @{ Success = $true; Output = $result.Output }
+        }
+        else {
+            @{ Success = $false; Output = $result.Output; Error = $true }
+        }
+    }
+
+    # ===== CODE ARTIFACTS =====
+    "save_code"                 = {
+        param($code, $filename, $language)
+        if (-not $code) {
+            return @{ Success = $false; Output = "Error: code parameter required"; Error = $true }
+        }
+        $lang = if ($language) { $language } else { 'text' }
+        $result = Save-Artifact -Code $code -Language $lang -Path $filename -Force
+        $result
+    }
+
+    "run_code"                  = {
+        param($code, $language, $filename)
+        if (-not $code) {
+            return @{ Success = $false; Output = "Error: code parameter required"; Error = $true }
+        }
+        if (-not $language) {
+            return @{ Success = $false; Output = "Error: language parameter required (powershell, python, js, bash, etc.)"; Error = $true }
+        }
+        # Save first if filename provided
+        if ($filename) {
+            Save-Artifact -Code $code -Language $language -Path $filename -Force | Out-Null
+        }
+        $result = Invoke-Artifact -Code $code -Language $language
+        $result
+    }
+
+    "list_artifacts"            = {
+        Get-Artifacts
+        @{ Success = $true; Output = "Listed saved artifacts." }
     }
     
     # ===== CLIPBOARD OPERATIONS =====
@@ -2457,9 +2552,12 @@ function Get-IntentInfo {
     
     Write-Host "`n===== Intent: $Name =====" -ForegroundColor Cyan
 
-    # Source attribution: plugin or core?
+    # Source attribution: user-skill, plugin, or core?
     $source = "core"
-    if ($global:LoadedPlugins) {
+    if ($global:LoadedUserSkills -and $global:LoadedUserSkills.ContainsKey($Name)) {
+        $source = "user-skill"
+    }
+    elseif ($global:LoadedPlugins) {
         foreach ($pName in $global:LoadedPlugins.Keys) {
             if ($global:LoadedPlugins[$pName].Intents -contains $Name) {
                 $source = "plugin: $pName"
