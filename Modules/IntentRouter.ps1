@@ -20,7 +20,7 @@ function Invoke-IntentAction {
     
     try {
         # ===== Validate intent exists =====
-        if (-not $global:IntentAliases.ContainsKey($Intent)) {
+        if (-not $global:IntentAliases.Contains($Intent)) {
             Write-Host "[Intent-$intentId] REJECTED: Intent '$Intent' not found" -ForegroundColor Red
             return @{
                 Success  = $false
@@ -296,7 +296,7 @@ function Get-IntentDescription {
     #>
     param([Parameter(Mandatory = $true)][string]$Name)
     
-    if ($global:IntentAliases.ContainsKey($Name)) {
+    if ($global:IntentAliases.Contains($Name)) {
         Write-Host "`nIntent: $Name" -ForegroundColor Cyan
         Write-Host "Status: Available" -ForegroundColor Green
         Write-Host "Type: Script Block" -ForegroundColor Gray
@@ -322,7 +322,7 @@ function Show-IntentHelp {
     
     # Filter categories if specified
     $categoriesToShow = if ($Category) {
-        if ($global:IntentCategories.ContainsKey($Category)) {
+        if ($global:IntentCategories.Contains($Category)) {
             @{ $Category = $global:IntentCategories[$Category] }
         }
         else {
@@ -341,7 +341,7 @@ function Show-IntentHelp {
         Write-Host "  $($cat.Description)" -ForegroundColor DarkGray
         
         foreach ($intentName in $cat.Intents) {
-            if ($global:IntentMetadata.ContainsKey($intentName)) {
+            if ($global:IntentMetadata.Contains($intentName)) {
                 $meta = $global:IntentMetadata[$intentName]
                 $paramStr = ""
                 if ($meta.Parameters.Count -gt 0) {
@@ -354,7 +354,7 @@ function Show-IntentHelp {
                 Write-Host $intentDisplay.PadRight(35) -NoNewline -ForegroundColor White
                 Write-Host "- $($meta.Description)" -ForegroundColor Gray
             }
-            elseif ($global:IntentAliases.ContainsKey($intentName)) {
+            elseif ($global:IntentAliases.Contains($intentName)) {
                 Write-Host "  $intentName" -ForegroundColor White
             }
         }
@@ -380,7 +380,7 @@ function Get-IntentInfo {
     #>
     param([Parameter(Mandatory = $true)][string]$Name)
     
-    if (-not $global:IntentAliases.ContainsKey($Name)) {
+    if (-not $global:IntentAliases.Contains($Name)) {
         Write-Host "Intent '$Name' not found" -ForegroundColor Red
         Write-Host "Available intents: $($global:IntentAliases.Keys -join ', ')" -ForegroundColor Yellow
         return
@@ -390,7 +390,7 @@ function Get-IntentInfo {
 
     # Source attribution: user-skill, plugin, or core?
     $source = "core"
-    if ($global:LoadedUserSkills -and $global:LoadedUserSkills.ContainsKey($Name)) {
+    if ($global:LoadedUserSkills -and $global:LoadedUserSkills.Contains($Name)) {
         $source = "user-skill"
     }
     elseif ($global:LoadedPlugins) {
@@ -403,7 +403,7 @@ function Get-IntentInfo {
     }
     Write-Host "Source: $source" -ForegroundColor DarkCyan
 
-    if ($global:IntentMetadata.ContainsKey($Name)) {
+    if ($global:IntentMetadata.Contains($Name)) {
         $meta = $global:IntentMetadata[$Name]
         Write-Host "Category: $($meta.Category)" -ForegroundColor Gray
         Write-Host "Description: $($meta.Description)" -ForegroundColor White
@@ -431,7 +431,7 @@ function Get-IntentInfo {
     }
     
     Write-Host "`nExample:" -ForegroundColor Yellow
-    if ($global:IntentMetadata.ContainsKey($Name) -and $global:IntentMetadata[$Name].Parameters.Count -gt 0) {
+    if ($global:IntentMetadata.Contains($Name) -and $global:IntentMetadata[$Name].Parameters.Count -gt 0) {
         $exampleParams = $global:IntentMetadata[$Name].Parameters | ForEach-Object { "`"$($_.Name)`":`"example`"" }
         Write-Host "  {`"intent`":`"$Name`",$($exampleParams -join ',')}" -ForegroundColor Gray
     }
@@ -451,7 +451,7 @@ Register-ArgumentCompleter -CommandName Invoke-IntentAction -ParameterName Inten
     param($commandName, $parameterName, $wordToComplete, $commandAst, $fakeBoundParameters)
     
     $global:IntentAliases.Keys | Where-Object { $_ -like "$wordToComplete*" } | Sort-Object | ForEach-Object {
-        $description = if ($global:IntentMetadata.ContainsKey($_)) { $global:IntentMetadata[$_].Description } else { "Intent action" }
+        $description = if ($global:IntentMetadata.Contains($_)) { $global:IntentMetadata[$_].Description } else { "Intent action" }
         [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', $description)
     }
 }
@@ -462,7 +462,7 @@ Register-ArgumentCompleter -CommandName Test-Intent -ParameterName JsonPayload -
     
     $global:IntentAliases.Keys | Sort-Object | ForEach-Object {
         $json = "{`"intent`":`"$_`"}"
-        $description = if ($global:IntentMetadata.ContainsKey($_)) { $global:IntentMetadata[$_].Description } else { "Intent action" }
+        $description = if ($global:IntentMetadata.Contains($_)) { $global:IntentMetadata[$_].Description } else { "Intent action" }
         [System.Management.Automation.CompletionResult]::new("'$json'", $_, 'ParameterValue', $description)
     }
 }

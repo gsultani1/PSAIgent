@@ -407,7 +407,7 @@ $global:IntentAliases = [ordered]@{
         if ($filename) {
             Save-Artifact -Code $code -Language $language -Path $filename -Force | Out-Null
         }
-        $result = Invoke-Artifact -Code $code -Language $language
+        $result = Invoke-Artifact -Code $code -Language $language -NoConfirm
         $result
     }
 

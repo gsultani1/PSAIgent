@@ -11,6 +11,9 @@ ChatConfig.json
 
 # User Preferences (already listed above)
 
+# User Skills
+UserSkills.json
+
 # Logs and History
 ChatLogs/
 AIExecutionLog.json

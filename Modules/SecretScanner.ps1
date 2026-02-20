@@ -36,7 +36,7 @@ function Invoke-SecretScan {
         for ($i = 0; $i -lt $lines.Count; $i++) {
             $line = $lines[$i]
             # Skip comment-only lines
-            if ($line.Trim() -match '^(#|//|;)') { continue }
+            if ("$line".Trim() -match '^(#|//|;)') { continue }
             foreach ($pat in $global:SecretPatterns) {
                 if ($line -match $pat.Pattern) {
                     $matched = $Matches[0]
