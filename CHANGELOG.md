@@ -4,6 +4,77 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.2.0] - 2026-02-20
+
+### Added
+
+#### Autonomous Agent Architecture
+- **`AgentLoop.ps1`** — Full ReAct (Reason + Act) agent engine
+  - Unified tool + intent dispatch: `{"tool":"calculator","expression":"2+2"}` or `{"intent":"create_docx","name":"report"}`
+  - Working memory (`$global:AgentMemory`) — `store`/`recall` values across steps
+  - ASK/ANSWER protocol — agent pauses mid-task to ask the user a question
+  - PLAN display — agent announces numbered plan before executing
+  - Interactive mode (`-Interactive`) — follow-up tasks with shared context and memory
+  - `Show-AgentSteps`, `Show-AgentMemory`, `Show-AgentPlan` inspection functions
+  - Increased defaults: 15 max steps, 12K token budget
+  - Aliases: `agent`, `agent-stop`, `agent-steps`, `agent-memory`, `agent-plan`
+
+- **`AgentTools.ps1`** — Lightweight tool registry for the agent
+  - `Register-AgentTool` — extensible registry (plugins can add tools)
+  - `Invoke-AgentTool`, `Get-AgentTools`, `Get-AgentToolInfo`
+  - 12 built-in tools:
+
+  | Tool | Description |
+  |------|-------------|
+  | `calculator` | Sanitized math expression evaluator |
+  | `datetime` | Current time, date math, timezone conversion |
+  | `web_search` | Web search (wraps WebTools.ps1) |
+  | `fetch_url` | Fetch and extract web page content |
+  | `wikipedia` | Wikipedia article search |
+  | `stock_quote` | Live stock price via Yahoo Finance (no API key) |
+  | `json_parse` | Parse JSON, extract values by dot-path |
+  | `regex_match` | Test regex patterns, return all matches |
+  | `read_file` | Read local text files |
+  | `shell` | Execute PowerShell (gated through safety system) |
+  | `store` | Save named value to working memory |
+  | `recall` | Retrieve named value from working memory |
+
+#### Chat Slash Commands
+- `/agent <task>` — Run agent task from within chat session
+- `/agent` — Enter interactive agent mode
+- `/tools` — List registered agent tools
+- `/steps` — Show steps from last agent run
+- `/memory` — Show agent working memory
+- `/plan` — Show agent's last announced plan
+
+#### Codebase Cleanup (previous session)
+- Merged `AIExecution.ps1` into `SafetySystem.ps1` — eliminated 9 duplicate functions
+- Removed duplicate `ll`, `la`, `lsd`, `lsf` from `SystemUtilities.ps1` (canonical in `NavigationUtils.ps1`)
+- Removed duplicate fzf functions and duplicate `Ctrl+R` binding from `TerminalTools.ps1` (canonical in `FzfIntegration.ps1`)
+- Wrapped all `SystemCleanup.ps1` commands in `Invoke-SystemCleanup` — nothing auto-runs on profile load
+
+#### Plugin Architecture (previous session)
+- **`PluginLoader.ps1`** — Comprehensive plugin system
+  - Dependency resolution via topological sort (`Resolve-PluginLoadOrder`)
+  - Per-plugin config: `$PluginConfig` defaults + `Plugins/Config/*.json` overrides
+  - `Get-PluginConfig`, `Set-PluginConfig`, `Reset-PluginConfig`
+  - Lifecycle hooks: `$PluginHooks` with `OnLoad`/`OnUnload` scriptblocks
+  - Self-test framework: `$PluginTests` + `Test-ShelixPlugin`
+  - Helper function sharing: `$PluginFunctions` → `$global:PluginHelpers`
+  - Version compatibility: `MinShelixVersion`/`MaxShelixVersion` checks
+  - Hot-reload file watcher: `Watch-ShelixPlugins` / `Stop-WatchShelixPlugins`
+  - Aliases: `test-plugin`, `watch-plugins`, `plugin-config`
+- Example plugins: `_Example.ps1` (updated), `_Pomodoro.ps1`, `_QuickNotes.ps1`
+- `$global:ShelixVersion` set to `'1.0.0'` in profile
+
+### Changed
+- `IntentAliasSystem.ps1` — Added `AgentTools.ps1` and `AgentLoop.ps1` to load order
+- `ChatSession.ps1` — Added agent slash commands to REPL switch block
+- `ProfileHelp.ps1` — Updated system prompt with agent tools and slash command info
+- Intent count: 30+ → 77+ (expanded intent system)
+
+---
+
 ## [1.1.0] - 2025-12-25
 
 ### Changed - Major Refactoring

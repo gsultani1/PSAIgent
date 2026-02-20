@@ -1,4 +1,4 @@
-# PowerShell AI Profile Setup Guide
+# Shelix Setup Guide
 
 ## Quick Start
 
@@ -119,10 +119,19 @@ chat -Provider ollama -Model llama3.2 -Stream
 | `resume` / `resume <name>` | Load a saved session |
 | `sessions` | Browse all saved sessions |
 | `search <keyword>` | Search across sessions |
+| `rename <name>` | Rename current session |
+| `export` / `export <name>` | Export session to markdown |
 | `budget` | Show token usage breakdown |
 | `folder` | Inject current directory context |
-| `switch <provider>` | Change provider |
+| `folder <path>` | Inject a specific directory |
+| `switch` | Change AI provider |
 | `model <name>` | Change model |
+| `agent <task>` or `/agent <task>` | Run autonomous agent task |
+| `/agent` | Interactive agent mode (follow-up tasks) |
+| `/tools` | List agent tools |
+| `/steps` | Show steps from last agent run |
+| `/memory` | Show agent working memory |
+| `/plan` | Show agent's last plan |
 
 ### AI Can Execute Commands
 
@@ -132,6 +141,27 @@ The AI can run PowerShell commands using:
 - `{"intent":"open_word"}`
 
 All executions are logged and require confirmation for non-read-only commands.
+
+### Autonomous Agent
+
+The agent reasons, plans, and uses tools autonomously:
+
+```powershell
+# One-shot task
+agent "check AAPL stock price and calculate 10% of it"
+
+# Interactive mode — follow-up tasks with shared memory
+agent -Interactive "research PowerShell automation"
+
+# Pre-seed working memory
+agent -Memory @{ budget = "5000" } "calculate 8% tax on the budget"
+
+# Inspect last run
+agent-steps    # Show what the agent did
+agent-memory   # Show stored values
+agent-plan     # Show the agent's plan
+agent-tools    # List all available tools
+```
 
 ---
 
@@ -245,6 +275,13 @@ plugin-config X   # View plugin configuration
 skills            # List user-defined skills
 new-skill 'Name'  # Create a skill interactively
 reload-skills     # Reload from UserSkills.json
+
+# Agent
+agent "task"      # Run autonomous agent task
+agent-tools       # List agent tools
+agent-steps       # Show last run steps
+agent-memory      # Show working memory
+agent-plan        # Show last plan
 
 # Workflows & Sessions
 workflows         # List available workflows

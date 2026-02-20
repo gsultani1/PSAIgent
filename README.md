@@ -1,32 +1,65 @@
 # Shelix
 
-> Your terminal, orchestrated. Shelix is an AI shell environment that understands your context — your files, your git state, your running processes — and acts on your behalf. Chat with Claude, GPT, or local LLMs. Execute commands, manage files, search the web, schedule workflows, and connect to MCP servers. All from PowerShell, all local-first, nothing phoning home.
+> Your terminal, orchestrated. Shelix is an AI shell environment that understands your context — your files, your git state, your running processes — and acts on your behalf. Chat with Claude, GPT, or local LLMs. Execute commands, manage files, search the web, run autonomous agents, and connect to MCP servers. All from PowerShell, all local-first, nothing phoning home.
 
 ![PowerShell](https://img.shields.io/badge/PowerShell-5.1%2B-blue)
 ![License](https://img.shields.io/badge/License-MIT-green)
 ![AI](https://img.shields.io/badge/AI-Claude%20%7C%20GPT%20%7C%20Ollama-purple)
 
-**Topics:** `shelix` `ai-assistant` `claude` `chatgpt` `ollama` `llm` `terminal` `mcp` `automation` `cli`
+**Topics:** `shelix` `ai-assistant` `claude` `chatgpt` `ollama` `llm` `terminal` `mcp` `agent` `automation` `cli`
 
 ## Features
 
 ### 🤖 AI Chat Assistant
 - **Multi-provider support**: Ollama, Anthropic Claude, OpenAI, LM Studio, + **llm CLI** (100+ plugins)
 - **Command execution**: AI can run safe PowerShell commands on your behalf
-- **Intent system**: Natural language actions like "create a doc called Report"
+- **Intent system**: 77+ natural language actions like "create a doc called Report"
 - **Streaming responses**: Real-time output from AI providers
 - **MCP Client**: Connect to external MCP servers for extended capabilities
 - **Conversation persistence**: Sessions auto-save and resume across restarts
 - **Folder awareness**: AI sees your current directory, git status, and file structure
 - **Token budget management**: Intelligently trims context to fit model limits, summarizes evicted messages
 
+### 🧠 Autonomous Agent
+
+Run multi-step tasks with a single command. The agent reasons, plans, uses tools, and adapts — no predefined workflow required.
+
+```powershell
+# One-shot task
+agent "check AAPL and MSFT stock prices and calculate the difference"
+
+# Interactive mode — follow-up tasks with shared memory
+agent -Interactive "research PowerShell async patterns"
+
+# Pre-seed working memory
+agent -Memory @{ budget = "5000" } "calculate 8% tax on the budget"
+```
+
+**Built-in agent tools:**
+
+| Tool | Description |
+|------|-------------|
+| `calculator` | Evaluate math expressions |
+| `datetime` | Current time, date math, timezone conversion |
+| `web_search` | Search the web |
+| `fetch_url` | Fetch and extract web page content |
+| `wikipedia` | Search Wikipedia |
+| `stock_quote` | Live stock price via Yahoo Finance (no API key) |
+| `json_parse` | Parse JSON, extract values by dot-path |
+| `regex_match` | Test regex patterns, return matches |
+| `read_file` | Read local text files |
+| `shell` | Execute PowerShell (safety-gated) |
+| `store` / `recall` | Working memory — save values between steps |
+
+Plugins can register additional tools via `Register-AgentTool`.
+
 ### 🔧 Available Intents
 
 | Category | Intents |
 |----------|---------|
-| **Documents** | `create_docx`, `create_xlsx` - Create and open Office documents |
+| **Documents** | `create_docx`, `create_xlsx` — Create and open Office documents |
 | **Clipboard** | `clipboard_read`, `clipboard_write`, `clipboard_format_json`, `clipboard_case` |
-| **Files** | `read_file`, `file_stats`, `save_code`, `list_artifacts` - Files and code artifacts |
+| **Files** | `read_file`, `file_stats`, `save_code`, `list_artifacts` — Files and code artifacts |
 | **Git** | `git_status`, `git_log`, `git_commit`, `git_push`, `git_pull`, `git_diff` |
 | **Calendar** | `calendar_today`, `calendar_week`, `calendar_create` (Outlook) |
 | **Web** | `web_search`, `wikipedia`, `fetch_url`, `search_web`, `browser_tab`, `browser_content` |
@@ -34,6 +67,7 @@
 | **MCP** | `mcp_servers`, `mcp_connect`, `mcp_tools`, `mcp_call` |
 | **Workflows** | `run_workflow`, `list_workflows`, `schedule_workflow`, `list_scheduled_workflows`, `remove_scheduled_workflow` |
 | **System** | `service_restart`, `system_info`, `network_status`, `process_list`, `process_kill`, `run_code` |
+| **Agent** | `agent_task` — Delegate a multi-step task to the autonomous agent |
 
 ### 🧩 Plugin Architecture
 
@@ -334,7 +368,7 @@ See [VISION.md](VISION.md) for the full product direction.
 | Status | Feature |
 |--------|---------|
 | ✅ | Multi-provider AI chat (Claude, GPT, Ollama, LM Studio, llm CLI) |
-| ✅ | Intent system — 30+ natural language actions |
+| ✅ | Intent system — 77+ natural language actions |
 | ✅ | Multi-step workflows + Windows Task Scheduler integration |
 | ✅ | Conversation persistence — sessions survive restarts |
 | ✅ | Token budget management — model-aware context trimming |
@@ -346,9 +380,9 @@ See [VISION.md](VISION.md) for the full product direction.
 | ✅ | Custom user skills — define intents via JSON config, no PowerShell required |
 | ✅ | Browser awareness — read active tab URL, fetch page content via UI Automation |
 | ✅ | Code artifacts — save, execute, and track AI-generated code blocks |
+| ✅ | **Autonomous agent** — ReAct loop, 12 built-in tools, working memory, interactive mode |
 | 🔜 | Vision model support — send screenshots/images directly to Claude/GPT-4o |
 | 🔜 | OCR integration — Tesseract for scanned docs, pdftotext for text PDFs |
-| 🔜 | Agent architecture — dynamic multi-step planning, not just predefined workflows |
 | 🔜 | RAG + SQLite — full-text search over conversation history, embedding-ready |
 | 🔜 | Browser automation — Selenium WebDriver integration |
 | 🔜 | Remote listener + webhooks — receive commands via Twilio/HTTP |

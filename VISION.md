@@ -17,6 +17,8 @@ Today it does things like:
 - **"What's in this folder?"** → reads your directory structure, git state, and notable files into the AI's context
 - **"Deploy staging"** → runs a user-defined skill (JSON config, no code) that chains git commands + intents
 - **Plugins** → drop a `.ps1` file into `Plugins/` and it registers new intents, categories, and workflows automatically
+- **`agent "check AAPL and MSFT and calculate the difference"`** → the agent searches stock prices, runs the math, and reports back — no orchestration from you
+- **`agent -Interactive "research async patterns"`** → multi-turn agent session with shared working memory across follow-up tasks
 
 All of it runs locally. Nothing phones home. The AI can only run commands you've explicitly whitelisted.
 
@@ -42,8 +44,8 @@ Persistent memory across sessions. The AI recalls what you worked on yesterday, 
 **4. Computer awareness** *(next)*
 Vision model support for screenshots and images. Browser tab awareness. OCR for documents and scanned PDFs. The AI sees what you see.
 
-**5. Agent architecture** *(planned)*
-Dynamic multi-step task planning. Instead of predefined workflows, the AI reasons about what tools to use in what order. "Analyze the invoices in this folder, flag anything overdue, and create a summary doc" becomes one command.
+**5. Agent architecture** *(✅ complete)*
+Dynamic multi-step task planning via the ReAct (Reason + Act) loop. The agent has 12 built-in tools (calculator, web search, stock quotes, Wikipedia, datetime, JSON parsing, regex, file reading, shell execution, working memory), unified tool+intent dispatch, an ASK protocol for mid-task user input, PLAN display, and interactive multi-turn sessions with shared memory.
 
 **6. Mission control GUI** *(future)*
 A dashboard layer over the shell. Not a replacement — an amplifier. The terminal stays the engine; the GUI surfaces context, history, running tasks, and agent state in a way that's faster to scan than a command line.
@@ -94,6 +96,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for how to add intents, providers, and mo
 
 The highest-leverage contributions right now:
 - **Plugins** — Drop `.ps1` files into `Plugins/` with `$PluginIntents`, config, hooks, and tests
+- **Agent tools** — Register custom tools via `Register-AgentTool` in a plugin
 - **User skills** — Add JSON-defined command sequences to `UserSkills.json`
 - **Provider integrations** — New LLM APIs, local model formats
 - **Cross-platform testing** — macOS/Linux via PowerShell 7
