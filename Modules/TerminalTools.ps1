@@ -373,87 +373,9 @@ function Show-Csv {
     }
 }
 
-# ===== fzf Integration (Fuzzy Finder) =====
-function Invoke-FzfHistory {
-    <#
-    .SYNOPSIS
-    Search command history with fzf
-    #>
-    if (-not $global:TerminalTools['fzf']) {
-        Write-Host "fzf not found. Install with: winget install fzf" -ForegroundColor Yellow
-        Get-History | Select-Object -Last 50 | Format-Table -AutoSize
-        return
-    }
-    
-    $historyPath = (Get-PSReadLineOption).HistorySavePath
-    if (Test-Path $historyPath) {
-        $selected = Get-Content $historyPath | Where-Object { $_ } | Select-Object -Unique | & fzf --tac --no-sort --height 40%
-        if ($selected) {
-            [Microsoft.PowerShell.PSConsoleReadLine]::Insert($selected)
-        }
-    }
-}
-
-function Invoke-FzfFile {
-    <#
-    .SYNOPSIS
-    Fuzzy find files
-    #>
-    param([string]$Path = ".")
-    
-    if (-not $global:TerminalTools['fzf']) {
-        Write-Host "fzf not found. Install with: winget install fzf" -ForegroundColor Yellow
-        return
-    }
-    
-    $selected = Get-ChildItem -Path $Path -Recurse -File -ErrorAction SilentlyContinue | 
-        Select-Object -ExpandProperty FullName | 
-        & fzf --height 40%
-    
-    if ($selected) { return $selected }
-}
-
-function Invoke-FzfDirectory {
-    <#
-    .SYNOPSIS
-    Fuzzy find and cd to directory
-    #>
-    param([string]$Path = ".")
-    
-    if (-not $global:TerminalTools['fzf']) {
-        Write-Host "fzf not found. Install with: winget install fzf" -ForegroundColor Yellow
-        return
-    }
-    
-    $selected = Get-ChildItem -Path $Path -Recurse -Directory -ErrorAction SilentlyContinue | 
-        Select-Object -ExpandProperty FullName | 
-        & fzf --height 40%
-    
-    if ($selected) { Set-Location $selected }
-}
-
-function Invoke-FzfEdit {
-    <#
-    .SYNOPSIS
-    Fuzzy find file and open in editor
-    #>
-    param(
-        [string]$Path = ".",
-        [string]$Editor = "code"
-    )
-    
-    $file = Invoke-FzfFile -Path $Path
-    if ($file) {
-        & $Editor $file
-    }
-}
-
-# Keyboard shortcut for fzf history
-if ($global:TerminalTools['fzf']) {
-    Set-PSReadLineKeyHandler -Chord 'Ctrl+r' -ScriptBlock {
-        Invoke-FzfHistory
-    }
-}
+# ===== fzf Integration =====
+# Invoke-FzfHistory, Invoke-FzfFile, Invoke-FzfDirectory, Ctrl+R keybinding
+# are defined in FzfIntegration.ps1 (which also adds Invoke-FzfProcess and Invoke-FzfGitBranch)
 
 # ===== ripgrep Integration =====
 function Invoke-Ripgrep {
@@ -534,10 +456,6 @@ try { Set-Alias cat cath -Force -Option AllScope } catch { }
 Set-Alias glow Show-Markdown -Force
 Set-Alias markdown Show-Markdown -Force
 Set-Alias vd Invoke-Visidata -Force
-Set-Alias fh Invoke-FzfHistory -Force
-Set-Alias ff Invoke-FzfFile -Force
-Set-Alias fd Invoke-FzfDirectory -Force
-Set-Alias fe Invoke-FzfEdit -Force
 Set-Alias rg Invoke-Ripgrep -Force
 Set-Alias gdiff Show-Diff -Force
 

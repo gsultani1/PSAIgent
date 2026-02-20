@@ -213,10 +213,7 @@ function Add-PathSystem {
 }
 
 # ===== File Listing Shortcuts =====
-function ll { Get-ChildItem -Force | Format-Table -AutoSize }
-function la { Get-ChildItem -Force -Hidden | Format-Table -AutoSize }
-function lsd { Get-ChildItem -Directory | Format-Table -AutoSize }
-function lsf { Get-ChildItem -File | Format-Table -AutoSize }
+# ll, la, lsd, lsf defined in NavigationUtils.ps1 (with @args splatting)
 
 function grep {
     <#

@@ -42,7 +42,6 @@ if (Test-Path $global:ModulesPath) {
     
     # AI and chat infrastructure
     . "$global:ModulesPath\NaturalLanguage.ps1"    # NL to command translation
-    . "$global:ModulesPath\AIExecution.ps1"        # AI command execution gateway
     . "$global:ModulesPath\ResponseParser.ps1"     # Parse AI responses
     
     # Document and productivity
