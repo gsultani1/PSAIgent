@@ -66,18 +66,14 @@ function Convert-JsonIntent {
                         $result += "**Intent Action**: ``$($jsonRequest.intent)``"
                         $result += ""
                         
-                        # Extract first parameter - AI may use 'param', 'query', 'path', 'url', 'name', etc.
-                        $param1 = if ($jsonRequest.param) { $jsonRequest.param }
-                                  elseif ($jsonRequest.query) { $jsonRequest.query }
-                                  elseif ($jsonRequest.path) { $jsonRequest.path }
-                                  elseif ($jsonRequest.url) { $jsonRequest.url }
-                                  elseif ($jsonRequest.name) { $jsonRequest.name }
-                                  elseif ($jsonRequest.topic) { $jsonRequest.topic }
-                                  elseif ($jsonRequest.text) { $jsonRequest.text }
-                                  else { "" }
+                        # Build full payload from JSON properties for proper multi-param support
+                        $intentPayload = @{}
+                        $jsonRequest.PSObject.Properties | ForEach-Object {
+                            if ($_.Name -ne 'intent') { $intentPayload[$_.Name] = $_.Value }
+                        }
                         
-                        # Use the intent router
-                        $intentResult = Invoke-IntentAction -Intent $jsonRequest.intent -Param $param1 -Param2 $jsonRequest.param2 -AutoConfirm
+                        # Use the intent router with full payload
+                        $intentResult = Invoke-IntentAction -Intent $jsonRequest.intent -Payload $intentPayload -AutoConfirm
                         $executionResults += $intentResult
                         
                         if ($intentResult.Success) {

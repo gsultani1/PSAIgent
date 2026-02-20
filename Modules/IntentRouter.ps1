@@ -119,18 +119,8 @@ function Invoke-IntentAction {
         
         # ===== Safety tier enforcement =====
         if ($meta -and $meta.Safety -eq 'RequiresConfirmation') {
-            if ($AutoConfirm -and -not $Force) {
-                Write-Host "[Intent-$intentId] BLOCKED: '$Intent' requires confirmation (Safety: RequiresConfirmation)" -ForegroundColor Red
-                return @{
-                    Success  = $false
-                    Output   = "Intent '$Intent' requires explicit confirmation. Use -Force to override."
-                    Error    = $true
-                    IntentId = $intentId
-                    Reason   = "SafetyBlock"
-                    Safety   = 'RequiresConfirmation'
-                }
-            }
             if (-not $Force) {
+                # AutoConfirm doesn't bypass RequiresConfirmation — force a prompt
                 $AutoConfirm = $false
             }
         }

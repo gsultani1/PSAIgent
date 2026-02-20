@@ -25,6 +25,7 @@ $global:CategoryDefinitions = @{
     'system'     = @{ Name = 'System Automation'; Description = 'Services, scheduled tasks, and system info' }
     'workflow'   = @{ Name = 'Workflows'; Description = 'Multi-step automated workflows' }
     'filesystem' = @{ Name = 'File System Operations'; Description = 'Create, rename, move, and manage files/folders' }
+    'agent'      = @{ Name = 'Agent'; Description = 'Autonomous multi-step task execution' }
 }
 
 # ===== Module Initialization =====
@@ -423,7 +424,7 @@ $global:IntentMetadata = @{
     }
     'list_workflows'            = @{ Category = 'workflow'; Description = 'List available workflows'; Parameters = @() }
     'agent_task'                = @{
-        Category    = 'workflow'
+        Category    = 'agent'
         Description = 'Run an autonomous agent to complete a multi-step task'
         Parameters  = @(
             @{ Name = 'task'; Required = $true; Description = 'Natural language task description' }

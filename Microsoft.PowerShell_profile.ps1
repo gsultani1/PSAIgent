@@ -3,7 +3,7 @@
 # Profile load timing
 $global:ProfileLoadStart = Get-Date
 $global:ProfileTimings = @{}
-$global:ShelixVersion = '1.0.0'
+$global:ShelixVersion = '1.2.0'
 
 # Safe Mode - report errors but continue loading
 trap {

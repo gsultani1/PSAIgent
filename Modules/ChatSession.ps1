@@ -14,7 +14,7 @@ function Start-ChatSession {
     Start an interactive LLM chat session
     #>
     param(
-        [ValidateSet('ollama', 'anthropic', 'lmstudio', 'openai')]
+        [ValidateSet('ollama', 'anthropic', 'lmstudio', 'openai', 'llm')]
         [string]$Provider = $global:DefaultChatProvider,
         [string]$Model = $null,
         [double]$Temperature = 0.7,
@@ -112,7 +112,7 @@ function Start-ChatSession {
         Write-Host "  Safe commands context loaded." -ForegroundColor Green
     }
     
-    # Folder awareness — inject current directory context
+    # Folder awareness -- inject current directory context
     if ($FolderAware) {
         Invoke-FolderContextUpdate -IncludeGitStatus
         Enable-FolderAwareness
@@ -255,6 +255,10 @@ function Start-ChatSession {
                 Invoke-FolderContextUpdate -IncludeGitStatus
                 continue
             }
+            '^folder\s+--preview$' {
+                Show-FolderContext -IncludeGitStatus
+                continue
+            }
             '^folder\s+(.+)$' {
                 $folderPath = $Matches[1]
                 if (Test-Path $folderPath) {
@@ -263,10 +267,6 @@ function Start-ChatSession {
                 else {
                     Write-Host "Path not found: $folderPath" -ForegroundColor Yellow
                 }
-                continue
-            }
-            '^folder\s+--preview$' {
-                Show-FolderContext -IncludeGitStatus
                 continue
             }
             '^(agent|/agent)\s+(.+)$' {
@@ -516,13 +516,13 @@ function Save-Chat {
     if (-not $Auto) {
         Write-Host "Saved session '$($global:ChatSessionName)' ($($global:ChatSessionHistory.Count) messages)" -ForegroundColor Green
         if (Get-Command Send-ShелixToast -ErrorAction SilentlyContinue) {
-            Send-ShелixToast -Title "Session saved" -Message "'$($global:ChatSessionName)' — $($global:ChatSessionHistory.Count) messages" -Type Info
+            Send-ShелixToast -Title "Session saved" -Message "'$($global:ChatSessionName)' -- $($global:ChatSessionHistory.Count) messages" -Type Info
         }
     }
     else {
-        # Auto-save on exit — toast so the user knows context was preserved
+        # Auto-save on exit -- toast so the user knows context was preserved
         if (Get-Command Send-ShелixToast -ErrorAction SilentlyContinue) {
-            Send-ShелixToast -Title "Session auto-saved" -Message "'$($global:ChatSessionName)' — $($global:ChatSessionHistory.Count) messages" -Type Info
+            Send-ShелixToast -Title "Session auto-saved" -Message "'$($global:ChatSessionName)' -- $($global:ChatSessionHistory.Count) messages" -Type Info
         }
     }
     
@@ -604,11 +604,12 @@ function Get-ChatSessions {
         }
         else { '(no preview)' }
         Write-Host "  $_ " -ForegroundColor Yellow -NoNewline
-        Write-Host "[$($e.messages) msgs, $date]" -ForegroundColor DarkGray
+        $msgCount = $e.messages
+        Write-Host ('[' + "$msgCount msgs, $date" + ']') -ForegroundColor DarkGray
         Write-Host "    $preview" -ForegroundColor Gray
     }
     Write-Host ""
-    Write-Host "  resume <name>  to load a session" -ForegroundColor DarkGray
+    Write-Host '  resume <name>  to load a session' -ForegroundColor DarkGray
     Write-Host ""
 }
 
@@ -647,7 +648,7 @@ function Get-SessionSummary {
     <#
     .SYNOPSIS
     Generate a compact summary of the current session for context injection.
-    Local heuristic — no LLM call, fast and free.
+    Local heuristic -- no LLM call, fast and free.
     #>
     param(
         [array]$Messages = $global:ChatSessionHistory,
@@ -867,6 +868,6 @@ Set-Alias chat-llm Start-ChatLLM -Force
 # Future: Replace JSON files with SQLite for portable storage and FTS5 full-text search.
 # Schema: sessions(id, name, created, updated, provider, model), messages(session_id, role, content, timestamp)
 # Migration: On first run, import existing JSON sessions into SQLite.
-# This enables RAG-ready conversation history — embeddings can be stored alongside messages.
+# This enables RAG-ready conversation history -- embeddings can be stored alongside messages.
 
 Write-Verbose "ChatSession loaded: Start-ChatSession, chat, Save-Chat, Resume-Chat, Get-ChatSessions, Search-ChatSessions, Export-ChatSession"

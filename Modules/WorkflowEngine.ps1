@@ -43,7 +43,8 @@ function Invoke-Workflow {
     param(
         [Parameter(Mandatory = $true)]
         [string]$Name,
-        [hashtable]$Params = @{}
+        [hashtable]$Params = @{},
+        [switch]$StopOnError
     )
     
     if (-not $global:Workflows.ContainsKey($Name)) {
@@ -97,6 +98,12 @@ function Invoke-Workflow {
             $results += @{ Success = $false; Error = $_.Exception.Message }
         }
         
+        # Halt on first failure if -StopOnError
+        if ($StopOnError -and $results[-1] -and -not $results[-1].Success) {
+            Write-Host "  [HALT] StopOnError — aborting remaining steps" -ForegroundColor Yellow
+            break
+        }
+        
         $stepNum++
     }
     
@@ -106,11 +113,11 @@ function Invoke-Workflow {
     if (Get-Command Send-ShелixToast -ErrorAction SilentlyContinue) {
         $allOk = ($results | Where-Object { -not $_.Success }).Count -eq 0
         if ($allOk) {
-            Send-ShелixToast -Title "Workflow complete" -Message $WorkflowName -Type Success
+            Send-ShелixToast -Title "Workflow complete" -Message $Name -Type Success
         }
         else {
             $failCount = ($results | Where-Object { -not $_.Success }).Count
-            Send-ShелixToast -Title "Workflow finished with errors" -Message "$WorkflowName — $failCount step(s) failed" -Type Warning
+            Send-ShелixToast -Title "Workflow finished with errors" -Message "$Name — $failCount step(s) failed" -Type Warning
         }
     }
     

@@ -3,6 +3,7 @@
 > Your terminal, orchestrated. Shelix is an AI shell environment that understands your context — your files, your git state, your running processes — and acts on your behalf. Chat with Claude, GPT, or local LLMs. Execute commands, manage files, search the web, run autonomous agents, and connect to MCP servers. All from PowerShell, all local-first, nothing phoning home.
 
 ![PowerShell](https://img.shields.io/badge/PowerShell-5.1%2B-blue)
+![Version](https://img.shields.io/badge/Version-1.2.0-blue)
 ![License](https://img.shields.io/badge/License-MIT-green)
 ![AI](https://img.shields.io/badge/AI-Claude%20%7C%20GPT%20%7C%20Ollama-purple)
 
@@ -126,6 +127,9 @@ workflows
 # Run a workflow
 workflow daily_standup
 workflow research_and_document -Params @{ topic = "AI agents" }
+
+# Stop on first failure
+Invoke-Workflow -Name daily_standup -StopOnError
 
 # AI can trigger via intent:
 # {"intent":"run_workflow","name":"research_and_document","params":"{\"topic\":\"PowerShell\"}"}
@@ -290,9 +294,11 @@ chat -AutoTrim      # automatically trim context when approaching model limits
 ## Safety Features
 
 - **Command whitelist**: Only approved commands can be executed
-- **Confirmation prompts**: Dangerous commands require approval
+- **Confirmation prompts**: Dangerous commands require approval — `RequiresConfirmation` intents always prompt, even in agent mode
 - **Rate limiting**: Prevents runaway execution
 - **Execution logging**: All AI commands are logged
+- **Path security**: File read/write operations validated against allowed roots
+- **Calculator sandboxing**: Only `[math]::` .NET calls permitted; arbitrary type access blocked
 
 ## Requirements
 
@@ -381,6 +387,7 @@ See [VISION.md](VISION.md) for the full product direction.
 | ✅ | Browser awareness — read active tab URL, fetch page content via UI Automation |
 | ✅ | Code artifacts — save, execute, and track AI-generated code blocks |
 | ✅ | **Autonomous agent** — ReAct loop, 12 built-in tools, working memory, interactive mode |
+| ✅ | **Codebase audit** — security hardening, parse fixes, duplicate removal, deterministic ordering |
 | 🔜 | Vision model support — send screenshots/images directly to Claude/GPT-4o |
 | 🔜 | OCR integration — Tesseract for scanned docs, pdftotext for text PDFs |
 | 🔜 | RAG + SQLite — full-text search over conversation history, embedding-ready |

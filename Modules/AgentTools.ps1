@@ -110,7 +110,7 @@ function Get-AgentToolInfo {
     #>
     param([Parameter(Mandatory = $true)][string]$Name)
 
-    if (-not $global:AgentTools.ContainsKey($Name)) {
+    if (-not $global:AgentTools.Contains($Name)) {
         Write-Host "Tool '$Name' not found." -ForegroundColor Red
         return
     }
@@ -122,7 +122,7 @@ function Get-AgentToolInfo {
         Write-Host "  Parameters:" -ForegroundColor Yellow
         foreach ($p in $tool.Parameters) {
             $req = if ($p.Required) { "(required)" } else { "(optional)" }
-            Write-Host "    $($p.Name) $req — $($p.Description)" -ForegroundColor Gray
+            Write-Host "    $($p.Name) $req -- $($p.Description)" -ForegroundColor Gray
         }
     }
     Write-Host ""
@@ -139,14 +139,27 @@ Register-AgentTool -Name 'calculator' `
     -Execute {
         param($p)
         $expr = $p['expression']
+        # Strip whitespace for analysis
+        $clean = $expr.Trim()
+        # Block any bracket usage that isn't [math]::
+        if ($clean -match '\[' -and $clean -notmatch '^\[math\]::' -and $clean -notmatch '(?<=[\s(+\-*/])\[math\]::') {
+            # Only allow [math]:: — block [System.IO.File], [Convert], etc.
+            if ($clean -match '\[[^\]]*\]' -and $clean -notmatch '\[math\]') {
+                return @{ Success = $false; Output = 'Only [math]:: calls are allowed, not arbitrary .NET types' }
+            }
+        }
         # Sanitize: allow digits, operators, parens, dots, [math]:: calls, spaces
         $sanitized = $expr -replace '[^0-9+\-*/%.() ,\[\]a-zA-Z:]', ''
         if ($sanitized -ne $expr) {
             return @{ Success = $false; Output = "Expression contains disallowed characters" }
         }
-        # Block anything that isn't math
-        if ($sanitized -match '(Get-|Set-|Remove-|New-|Start-|Stop-|Invoke-|Import-|Export-)') {
+        # Block cmdlets and known dangerous patterns
+        if ($sanitized -match '(Get-|Set-|Remove-|New-|Start-|Stop-|Invoke-|Import-|Export-|Write-|Read-)') {
             return @{ Success = $false; Output = "Only math expressions are allowed" }
+        }
+        # Block .NET type access except [math]
+        if ($sanitized -match '\[(?!math\])') {
+            return @{ Success = $false; Output = 'Only [math]:: is allowed -- no other .NET type access' }
         }
         try {
             $result = Invoke-Expression $sanitized
@@ -300,7 +313,7 @@ Register-AgentTool -Name 'stock_quote' `
         param($p)
         $symbol = $p['symbol'].ToUpper().Trim()
         try {
-            $url = "https://query1.finance.yahoo.com/v8/finance/chart/$symbol?interval=1d&range=1d"
+            $url = "https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?interval=1d" + "&range=1d"
             $headers = @{ 'User-Agent' = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }
             $response = Invoke-RestMethod -Uri $url -Headers $headers -TimeoutSec 10
             $meta = $response.chart.result[0].meta
@@ -402,6 +415,14 @@ Register-AgentTool -Name 'read_file' `
     -Execute {
         param($p)
         $path = $p['path']
+        # Security: validate path is within allowed roots
+        if (Get-Command Test-PathAllowed -ErrorAction SilentlyContinue) {
+            $validation = Test-PathAllowed -Path $path
+            if (-not $validation.Success) {
+                return @{ Success = $false; Output = "Security: $($validation.Message)" }
+            }
+            $path = $validation.Path
+        }
         if (-not (Test-Path $path)) {
             return @{ Success = $false; Output = "File not found: $path" }
         }

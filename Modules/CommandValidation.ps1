@@ -399,56 +399,8 @@ function Invoke-SafeAction {
     }
 }
 
-function Invoke-SafeCommand {
-    <#
-    .SYNOPSIS
-    Execute a safe command with proper validation and confirmation (alias for Invoke-SafeAction)
-    #>
-    param([Parameter(Mandatory=$true)][string]$Command)
-    
-    $validation = Test-PowerShellCommand $Command
-    
-    if (-not $validation.IsValid) {
-        return @{
-            Success = $false
-            Output = "Command '$Command' is not in the safe actions list"
-            Error = $true
-        }
-    }
-    
-    # Check if confirmation is needed
-    if ($validation.SafetyLevel -ne 'ReadOnly') {
-        Write-Host "`nCommand requires confirmation: $Command" -ForegroundColor Yellow
-        $confirmed = Show-CommandConfirmation $Command $validation.SafetyLevel $validation.Description
-        if (-not $confirmed) {
-            return @{
-                Success = $false
-                Output = "Command execution cancelled by user"
-                Error = $false
-            }
-        }
-    }
-    
-    try {
-        Write-Host "Executing: $Command" -ForegroundColor Cyan
-        $output = Invoke-Expression $Command | Out-String
-        Write-Host "Command completed successfully." -ForegroundColor Green
-        
-        return @{
-            Success = $true
-            Output = $output
-            Error = $false
-        }
-    } catch {
-        return @{
-            Success = $false
-            Output = "Error: $($_.Exception.Message)"
-            Error = $true
-        }
-    }
-}
-
 # ===== Aliases =====
+Set-Alias -Name Invoke-SafeCommand -Value Invoke-SafeAction -Force
 Set-Alias actions Get-SafeActions -Force
 Set-Alias safe-check Test-SafeAction -Force
 Set-Alias safe-run Invoke-SafeAction -Force

@@ -12,62 +12,114 @@ $global:AgentRequireConfirmation = $true
 $global:AgentAbort = $false
 $global:AgentLastResult = $null
 $global:AgentLastPlan = $null
+$global:AgentPromptCache = $null       # Cached static portion (tools + intents + protocol)
+$global:AgentPromptCacheHash = $null   # Hash to detect when tools/intents change
 
 function Get-AgentSystemPrompt {
     <#
     .SYNOPSIS
     Build the agent system prompt with available tools, intents, memory state, and protocol.
+    Caches the static portion (tools + intents + protocol) across steps for performance.
     #>
     param(
         [switch]$IncludeFolderContext,
         [hashtable]$Memory = $global:AgentMemory
     )
 
-    $sb = [System.Text.StringBuilder]::new()
+    # --- Build or reuse cached static section (tools + intents + protocol) ---
+    $currentHash = "$($global:AgentTools.Count)-$($global:IntentAliases.Count)"
+    if (-not $global:AgentPromptCache -or $global:AgentPromptCacheHash -ne $currentHash) {
+        $static = [System.Text.StringBuilder]::new()
 
-    [void]$sb.AppendLine("You are an autonomous task agent inside a PowerShell environment called Shelix.")
-    [void]$sb.AppendLine("Break the user's request into steps. Execute one step at a time using the tools and intents below.")
-    [void]$sb.AppendLine("")
+        [void]$static.AppendLine("You are an autonomous task agent inside a PowerShell environment called Shelix.")
+        [void]$static.AppendLine("Break the user's request into steps. Execute one step at a time using the tools and intents below.")
+        [void]$static.AppendLine("")
 
-    # --- Agent Tools section ---
-    [void]$sb.AppendLine("TOOLS (lightweight, for computation and lookups):")
-    foreach ($toolName in $global:AgentTools.Keys) {
-        $tool = $global:AgentTools[$toolName]
-        $paramStr = ""
-        if ($tool.Parameters -and $tool.Parameters.Count -gt 0) {
-            $parts = $tool.Parameters | ForEach-Object {
-                $req = if ($_.Required) { "" } else { "?" }
-                "`"$($_.Name)$req`":`"..`""
-            }
-            $paramStr = "," + ($parts -join ",")
-        }
-        [void]$sb.AppendLine("  {`"tool`":`"$toolName`"$paramStr}  -- $($tool.Description)")
-    }
-
-    # --- Intents section ---
-    [void]$sb.AppendLine("")
-    [void]$sb.AppendLine("INTENTS (actions that affect the system — files, apps, git, etc.):")
-    foreach ($catKey in $global:IntentCategories.Keys | Sort-Object) {
-        $cat = $global:IntentCategories[$catKey]
-        [void]$sb.AppendLine("")
-        [void]$sb.AppendLine("  $($cat.Name.ToUpper()):")
-        foreach ($intentName in $cat.Intents) {
-            if ($global:IntentMetadata.ContainsKey($intentName)) {
-                $meta = $global:IntentMetadata[$intentName]
-                # Skip agent_task to prevent recursion
-                if ($intentName -eq 'agent_task') { continue }
-                $paramStr = ""
-                if ($meta.Parameters -and $meta.Parameters.Count -gt 0) {
-                    $parts = $meta.Parameters | ForEach-Object {
-                        $req = if ($_.Required) { "" } else { "?" }
-                        "`"$($_.Name)$req`":`"..`""
-                    }
-                    $paramStr = "," + ($parts -join ",")
+        # --- Agent Tools section ---
+        [void]$static.AppendLine("TOOLS (lightweight, for computation and lookups):")
+        foreach ($toolName in $global:AgentTools.Keys) {
+            $tool = $global:AgentTools[$toolName]
+            $paramStr = ""
+            if ($tool.Parameters -and $tool.Parameters.Count -gt 0) {
+                $parts = $tool.Parameters | ForEach-Object {
+                    $req = if ($_.Required) { "" } else { "?" }
+                    "`"$($_.Name)$req`":`"..`""
                 }
-                [void]$sb.AppendLine("    {`"intent`":`"$intentName`"$paramStr}  -- $($meta.Description)")
+                $paramStr = "," + ($parts -join ",")
+            }
+            [void]$static.AppendLine("  {`"tool`":`"$toolName`"$paramStr}  -- $($tool.Description)")
+        }
+
+        # --- Intents section ---
+        [void]$static.AppendLine("")
+        [void]$static.AppendLine('INTENTS (actions that affect the system -- files, apps, git, etc.):')
+        foreach ($catKey in $global:IntentCategories.Keys | Sort-Object) {
+            $cat = $global:IntentCategories[$catKey]
+            [void]$static.AppendLine("")
+            [void]$static.AppendLine("  $($cat.Name.ToUpper()):")
+            foreach ($intentName in $cat.Intents) {
+                if ($global:IntentMetadata.ContainsKey($intentName)) {
+                    $meta = $global:IntentMetadata[$intentName]
+                    # Skip agent_task to prevent recursion
+                    if ($intentName -eq 'agent_task') { continue }
+                    $paramStr = ""
+                    if ($meta.Parameters -and $meta.Parameters.Count -gt 0) {
+                        $parts = $meta.Parameters | ForEach-Object {
+                            $req = if ($_.Required) { "" } else { "?" }
+                            "`"$($_.Name)$req`":`"..`""
+                        }
+                        $paramStr = "," + ($parts -join ",")
+                    }
+                    [void]$static.AppendLine("    {`"intent`":`"$intentName`"$paramStr}  -- $($meta.Description)")
+                }
             }
         }
+
+        # --- Protocol ---
+        [void]$static.AppendLine("")
+        $protocol = @"
+RESPONSE FORMAT -- use exactly one per response:
+
+To show your plan (optional, first response only):
+PLAN:
+1. First step description
+2. Second step description
+
+To reason and act:
+THOUGHT: (your reasoning)
+ACTION: (JSON on its own line -- either {"tool":"name",...} or {"intent":"name",...})
+
+To ask the user a question mid-task:
+THOUGHT: (why you need input)
+ASK: (question for the user)
+
+To finish:
+THOUGHT: (summary)
+DONE: (final answer or result)
+
+To report inability:
+THOUGHT: (what went wrong)
+STUCK: (what you need from the user)
+
+RULES:
+1. ONE action per response. Wait for the OBSERVATION before continuing.
+2. Output ACTION JSON as plain text -- never in code blocks or backticks.
+3. Use {"tool":"name",...} for computation/lookups, {"intent":"name",...} for system actions.
+4. Use store/recall tools to save important intermediate values.
+5. If an action fails, analyze and try an alternative.
+6. Use ASK when you genuinely need user input to proceed.
+7. Use DONE when complete with a clear summary.
+8. Do not repeat the same failed action.
+"@
+        [void]$static.AppendLine($protocol)
+
+        $global:AgentPromptCache = $static.ToString()
+        $global:AgentPromptCacheHash = $currentHash
     }
+
+    # --- Dynamic section: memory + folder context (rebuilt every call) ---
+    $sb = [System.Text.StringBuilder]::new()
+    [void]$sb.Append($global:AgentPromptCache)
 
     # --- Working Memory ---
     [void]$sb.AppendLine("")
@@ -80,45 +132,8 @@ function Get-AgentSystemPrompt {
         }
     }
     else {
-        [void]$sb.AppendLine("WORKING MEMORY: (empty) — use store/recall tools to save values between steps")
+        [void]$sb.AppendLine('WORKING MEMORY: (empty) -- use store/recall tools to save values between steps')
     }
-
-    # --- Protocol ---
-    [void]$sb.AppendLine("")
-    [void]$sb.AppendLine(@"
-RESPONSE FORMAT — use exactly one per response:
-
-To show your plan (optional, first response only):
-PLAN:
-1. First step description
-2. Second step description
-
-To reason and act:
-THOUGHT: <your reasoning>
-ACTION: <JSON on its own line — either {"tool":"name",...} or {"intent":"name",...}>
-
-To ask the user a question mid-task:
-THOUGHT: <why you need input>
-ASK: <question for the user>
-
-To finish:
-THOUGHT: <summary>
-DONE: <final answer or result>
-
-To report inability:
-THOUGHT: <what went wrong>
-STUCK: <what you need from the user>
-
-RULES:
-1. ONE action per response. Wait for the OBSERVATION before continuing.
-2. Output ACTION JSON as plain text — never in code blocks or backticks.
-3. Use {"tool":"name",...} for computation/lookups, {"intent":"name",...} for system actions.
-4. Use store/recall tools to save important intermediate values.
-5. If an action fails, analyze and try an alternative.
-6. Use ASK when you genuinely need user input to proceed.
-7. Use DONE when complete with a clear summary.
-8. Do not repeat the same failed action.
-"@)
 
     # --- Folder context ---
     if ($IncludeFolderContext -and (Get-Command Get-FolderContext -ErrorAction SilentlyContinue)) {
@@ -253,7 +268,7 @@ function Invoke-AgentTask {
     Natural language description of what to accomplish.
 
     .PARAMETER Interactive
-    Enter interactive mode — after the task completes, prompt for follow-up tasks
+    Enter interactive mode -- after the task completes, prompt for follow-up tasks
     with shared context and memory.
 
     .PARAMETER Memory
@@ -494,12 +509,12 @@ function Invoke-AgentTask {
                 $done = $true
                 $finalSummary = "STUCK: $stuckText"
                 $abortReason = "Stuck"
-                Write-Host "`n[Agent] Stuck — needs user input" -ForegroundColor Yellow
+                Write-Host "`n[Agent] Stuck -- needs user input" -ForegroundColor Yellow
                 Write-Host "  $stuckText" -ForegroundColor White
                 break
             }
 
-            # Handle ASK — pause for user input
+            # Handle ASK -- pause for user input
             if ($askText) {
                 Write-Host "`n[Agent] Question:" -ForegroundColor Magenta
                 Write-Host "  $askText" -ForegroundColor White
@@ -510,13 +525,13 @@ function Invoke-AgentTask {
                     break
                 }
                 $agentMessages += @{ role = "user"; content = "ANSWER: $userAnswer" }
-                # Don't increment step for ASK — it's not an action
-                $stepNumber--
-                $totalSteps--
+                # Don't count ASK as an action step
+                $stepNumber = [math]::Max(0, $stepNumber - 1)
+                $totalSteps = [math]::Max(0, $totalSteps - 1)
                 continue
             }
 
-            # Handle ACTION — unified tool + intent dispatch
+            # Handle ACTION -- unified tool + intent dispatch
             if ($action) {
                 $actionJson = $null
                 try {

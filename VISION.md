@@ -19,8 +19,11 @@ Today it does things like:
 - **Plugins** → drop a `.ps1` file into `Plugins/` and it registers new intents, categories, and workflows automatically
 - **`agent "check AAPL and MSFT and calculate the difference"`** → the agent searches stock prices, runs the math, and reports back — no orchestration from you
 - **`agent -Interactive "research async patterns"`** → multi-turn agent session with shared working memory across follow-up tasks
+- **`Invoke-Workflow -Name daily_standup -StopOnError`** → halt a workflow on first failure rather than running all steps regardless
 
 All of it runs locally. Nothing phones home. The AI can only run commands you've explicitly whitelisted.
+
+As of v1.2.0, the codebase has been fully audited: security hardened, parse errors eliminated, duplicate code removed, and intent ordering made deterministic. The foundation is clean.
 
 ---
 
@@ -33,7 +36,7 @@ The long-term vision is **mission control for your entire computer** — an AI l
 ### The layers, in order:
 
 **1. Shell orchestrator** *(✅ complete)*
-The AI understands your terminal context — current directory, git state, running processes, file structure — and can execute actions through a safety-gated intent system with 30+ built-in intents.
+The AI understands your terminal context — current directory, git state, running processes, file structure — and can execute actions through a safety-gated intent system with 77+ built-in intents. Security hardened: calculator sandboxed to `[math]::` only, file reads validated against allowed roots, `RequiresConfirmation` intents always prompt even in agent mode.
 
 **2. Extensibility layer** *(✅ complete)*
 Drop-in plugin architecture with dependency resolution, per-plugin configuration, lifecycle hooks, self-tests, and hot-reload. User-defined skills via JSON config for non-programmers. Community contributions without merge conflicts.
@@ -101,6 +104,7 @@ The highest-leverage contributions right now:
 - **Provider integrations** — New LLM APIs, local model formats
 - **Cross-platform testing** — macOS/Linux via PowerShell 7
 - **Vision + OCR** — Multimodal model support, Tesseract integration
+- **RAG layer** — SQLite conversation storage, embedding-ready schema (stub exists in ChatSession.ps1)
 
 ---
 

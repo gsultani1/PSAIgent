@@ -123,6 +123,7 @@ chat -Provider ollama -Model llama3.2 -Stream
 | `export` / `export <name>` | Export session to markdown |
 | `budget` | Show token usage breakdown |
 | `folder` | Inject current directory context |
+| `folder --preview` | Show what the AI sees (without injecting) |
 | `folder <path>` | Inject a specific directory |
 | `switch` | Change AI provider |
 | `model <name>` | Change model |
@@ -215,6 +216,9 @@ actions
 actions -Category FileOperations
 ```
 
+### Agent blocked on `RequiresConfirmation` intent
+The agent will prompt for confirmation on sensitive intents (git push, process kill, etc.) even in autonomous mode. This is by design. Type `y` to allow or `n` to skip. Use `-Force` only if you want to bypass confirmation entirely.
+
 ### Profile won't load
 ```powershell
 # Check for errors
@@ -278,10 +282,15 @@ reload-skills     # Reload from UserSkills.json
 
 # Agent
 agent "task"      # Run autonomous agent task
+agent -Interactive # Multi-turn agent session
 agent-tools       # List agent tools
 agent-steps       # Show last run steps
 agent-memory      # Show working memory
 agent-plan        # Show last plan
+
+# Workflows
+Invoke-Workflow -Name daily_standup              # Run workflow
+Invoke-Workflow -Name daily_standup -StopOnError # Halt on first failure
 
 # Workflows & Sessions
 workflows         # List available workflows

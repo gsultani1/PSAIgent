@@ -2,7 +2,7 @@
 # Core intent scriptblocks: documents, files, web, clipboard, git, MCP, calendar.
 # Initializes $global:IntentAliases — loaded after IntentRegistry.ps1.
 
-$global:IntentAliases = @{
+$global:IntentAliases = [ordered]@{
     # ===== Document Operations =====
     "create_docx"               = { 
         param($name, $content)
