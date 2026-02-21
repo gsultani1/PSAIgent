@@ -5,6 +5,8 @@
 $global:HeartbeatTasksPath = "$global:BildsyPSHome\config\agent-tasks.json"
 $global:HeartbeatLogPath = "$global:BildsyPSHome\logs\heartbeat.log"
 $global:HeartbeatDefaultInterval = 15  # minutes between polls
+$global:HeartbeatMaxLogLines = 500     # rotate log when it exceeds this
+$script:HeartbeatTableReady = $false   # lazy-init flag for SQLite table
 
 # ===== Task List Management =====
 
@@ -27,12 +29,17 @@ function Get-AgentTaskList {
 function Save-AgentTaskList {
     <#
     .SYNOPSIS
-    Save the task list back to JSON.
+    Save the task list back to JSON. Uses atomic write-to-temp-then-rename
+    to prevent corruption if the process crashes mid-write.
     #>
     param([Parameter(Mandatory)][array]$Tasks)
     $dir = Split-Path $global:HeartbeatTasksPath -Parent
     if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
-    $Tasks | ConvertTo-Json -Depth 5 | Set-Content $global:HeartbeatTasksPath -Encoding UTF8
+
+    # Atomic write: write to .tmp, then move over the real file
+    $tmpPath = "$global:HeartbeatTasksPath.tmp"
+    $Tasks | ConvertTo-Json -Depth 5 | Set-Content $tmpPath -Encoding UTF8
+    Move-Item -Path $tmpPath -Destination $global:HeartbeatTasksPath -Force
 }
 
 function Add-AgentTask {
@@ -48,6 +55,40 @@ function Add-AgentTask {
         [string]$Interval,
         [string]$Days
     )
+
+    # Validate time format for daily/weekly schedules
+    if ($Schedule -in @('daily', 'weekly')) {
+        try { [datetime]::ParseExact($Time, 'HH:mm', $null) | Out-Null }
+        catch {
+            Write-Host "Invalid time '$Time'. Use 24-hour HH:mm format (e.g. '09:00', '14:30')." -ForegroundColor Red
+            return
+        }
+    }
+
+    # Validate interval syntax
+    if ($Schedule -eq 'interval') {
+        if (-not $Interval) {
+            Write-Host "Interval schedule requires -Interval (e.g. '30m', '2h', '1d')." -ForegroundColor Red
+            return
+        }
+        if ($Interval -notmatch '^\d+[dhms]$') {
+            Write-Host "Invalid interval '$Interval'. Use format: <number><unit> where unit is d/h/m/s (e.g. '30m', '2h', '1d')." -ForegroundColor Red
+            return
+        }
+    }
+
+    # Validate day names for weekly schedules
+    if ($Schedule -eq 'weekly' -and $Days) {
+        $validDays = @('Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun',
+                       'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday')
+        $dayList = $Days -split ',' | ForEach-Object { $_.Trim() }
+        foreach ($day in $dayList) {
+            if ($day -notin $validDays) {
+                Write-Host "Invalid day '$day'. Use: Mon,Tue,Wed,Thu,Fri,Sat,Sun (or full names)." -ForegroundColor Red
+                return
+            }
+        }
+    }
 
     $tasks = @(Get-AgentTaskList)
     if ($tasks | Where-Object { $_.id -eq $Id }) {
@@ -146,6 +187,47 @@ function Show-AgentTaskList {
 
 # ===== Schedule Logic =====
 
+function ConvertTo-NormalizedDayName {
+    <#
+    .SYNOPSIS
+    Normalize a day name to its 3-letter abbreviation for reliable comparison.
+    Accepts both full names ("Monday") and abbreviations ("Mon").
+    #>
+    param([string]$Day)
+    $map = @{
+        'monday' = 'Mon'; 'mon' = 'Mon'
+        'tuesday' = 'Tue'; 'tue' = 'Tue'
+        'wednesday' = 'Wed'; 'wed' = 'Wed'
+        'thursday' = 'Thu'; 'thu' = 'Thu'
+        'friday' = 'Fri'; 'fri' = 'Fri'
+        'saturday' = 'Sat'; 'sat' = 'Sat'
+        'sunday' = 'Sun'; 'sun' = 'Sun'
+    }
+    $normalized = $map[$Day.ToLower()]
+    if ($normalized) { return $normalized }
+    return $Day.Substring(0, [Math]::Min(3, $Day.Length))
+}
+
+function ConvertTo-TimeSpanFromInterval {
+    <#
+    .SYNOPSIS
+    Parse an interval string like '30m', '2h', '1d', '45s' into a TimeSpan.
+    Returns $null if the format is invalid.
+    #>
+    param([string]$Interval)
+    if ($Interval -match '^\d+[dhms]$') {
+        $val = [int]($Interval -replace '[dhms]$', '')
+        $unit = $Interval[-1]
+        switch ($unit) {
+            'd' { return New-TimeSpan -Days $val }
+            'h' { return New-TimeSpan -Hours $val }
+            'm' { return New-TimeSpan -Minutes $val }
+            's' { return New-TimeSpan -Seconds $val }
+        }
+    }
+    return $null
+}
+
 function Test-TaskDue {
     <#
     .SYNOPSIS
@@ -168,8 +250,10 @@ function Test-TaskDue {
         }
         'weekly' {
             if (-not $lastRun) { return $true }
-            $dayNames = if ($Task.days) { $Task.days -split ',' | ForEach-Object { $_.Trim() } } else { @('Monday') }
-            $todayName = $now.DayOfWeek.ToString().Substring(0, 3)
+            $dayNames = if ($Task.days) {
+                $Task.days -split ',' | ForEach-Object { ConvertTo-NormalizedDayName $_.Trim() }
+            } else { @('Mon') }
+            $todayName = ConvertTo-NormalizedDayName $now.DayOfWeek.ToString()
             if ($todayName -notin $dayNames) { return $false }
             $targetTime = [datetime]::Parse($Task.time)
             $todayTarget = $now.Date.Add($targetTime.TimeOfDay)
@@ -177,15 +261,7 @@ function Test-TaskDue {
         }
         'interval' {
             if (-not $lastRun) { return $true }
-            $intervalStr = $Task.interval
-            $timespan = $null
-            if ($intervalStr -match '^(\d+)([hms])$') {
-                $val = [int]$Matches[1]
-                $unit = $Matches[2]
-                if ($unit -eq 'h') { $timespan = New-TimeSpan -Hours $val }
-                elseif ($unit -eq 'm') { $timespan = New-TimeSpan -Minutes $val }
-                elseif ($unit -eq 's') { $timespan = New-TimeSpan -Seconds $val }
-            }
+            $timespan = ConvertTo-TimeSpanFromInterval $Task.interval
             if (-not $timespan) { return $false }
             return (($now - $lastRun) -ge $timespan)
         }
@@ -194,6 +270,29 @@ function Test-TaskDue {
 }
 
 # ===== Heartbeat Execution =====
+
+function Initialize-HeartbeatTable {
+    <#
+    .SYNOPSIS
+    Create the heartbeat_runs SQLite table if it doesn't exist. Only runs once per session.
+    #>
+    if ($script:HeartbeatTableReady) { return $true }
+    if (-not $global:ChatDbReady) { return $false }
+    if (-not (Get-Command Get-ChatDbConnection -ErrorAction SilentlyContinue)) { return $false }
+
+    try {
+        $conn = Get-ChatDbConnection
+        $cmd = $conn.CreateCommand()
+        $cmd.CommandText = "CREATE TABLE IF NOT EXISTS heartbeat_runs (id INTEGER PRIMARY KEY AUTOINCREMENT, run_at TEXT NOT NULL DEFAULT (datetime('now')), tasks_checked INTEGER, tasks_run INTEGER, log TEXT)"
+        $cmd.ExecuteNonQuery() | Out-Null
+        $cmd.Dispose()
+        $conn.Close()
+        $conn.Dispose()
+        $script:HeartbeatTableReady = $true
+        return $true
+    }
+    catch { return $false }
+}
 
 function Invoke-AgentHeartbeat {
     <#
@@ -204,20 +303,30 @@ function Invoke-AgentHeartbeat {
     param([switch]$Force)
 
     $tasks = @(Get-AgentTaskList)
-    if ($tasks.Count -eq 0) { return }
+    if ($tasks.Count -eq 0) { return @{ TasksChecked = 0; TasksRun = 0 } }
 
-    $logEntry = "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] Heartbeat check: $($tasks.Count) task(s)"
-    $ran = 0
-
+    # Pre-scan: are any tasks due? Avoid log/DB overhead when nothing fires.
+    $dueTasks = @()
     foreach ($task in $tasks) {
         $isDue = if ($Force) { $task.enabled } else { Test-TaskDue -Task $task }
-        if (-not $isDue) { continue }
+        if ($isDue) { $dueTasks += $task }
+    }
 
+    if ($dueTasks.Count -eq 0) {
+        return @{ TasksChecked = $tasks.Count; TasksRun = 0 }
+    }
+
+    $logEntry = "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] Heartbeat: $($dueTasks.Count)/$($tasks.Count) task(s) due"
+    $hasAgentLoop = [bool](Get-Command Invoke-AgentTask -ErrorAction SilentlyContinue)
+
+    foreach ($task in $dueTasks) {
         $logEntry += "`n  Running: $($task.id) -- $($task.task)"
 
         try {
-            if (Get-Command Invoke-AgentTask -ErrorAction SilentlyContinue) {
-                $result = Invoke-AgentTask -Task $task.task -MaxSteps 10
+            if ($hasAgentLoop) {
+                # MaxSteps caps LLM iterations; Task Scheduler ExecutionTimeLimit
+                # provides the hard timeout for the entire heartbeat process.
+                $result = Invoke-AgentTask -Task $task.task -MaxSteps 10 -Silent
                 $summary = if ($result.Summary) { $result.Summary } else { "Completed ($($result.StepCount) steps)" }
                 $task.lastResult = $summary
             }
@@ -231,29 +340,35 @@ function Invoke-AgentHeartbeat {
 
         $task.lastRun = (Get-Date -Format 'o')
         $logEntry += "`n    Result: $($task.lastResult)"
-        $ran++
     }
 
+    $ran = $dueTasks.Count
+
     # Save updated task list with lastRun/lastResult
-    if ($ran -gt 0) {
-        Save-AgentTaskList -Tasks $tasks
-    }
+    Save-AgentTaskList -Tasks $tasks
 
     $logEntry += "`n  Executed: $ran task(s)"
 
-    # Append to log file
+    # Append to log file (with rotation)
     $logDir = Split-Path $global:HeartbeatLogPath -Parent
     if (-not (Test-Path $logDir)) { New-Item -ItemType Directory -Path $logDir -Force | Out-Null }
     $logEntry | Out-File $global:HeartbeatLogPath -Append -Encoding UTF8
 
-    # Store in SQLite if available
-    if ($global:ChatDbReady -and (Get-Command Get-ChatDbConnection -ErrorAction SilentlyContinue)) {
+    # Rotate log if it exceeds the limit
+    if (Test-Path $global:HeartbeatLogPath) {
+        $lineCount = @(Get-Content $global:HeartbeatLogPath -ErrorAction SilentlyContinue).Count
+        if ($lineCount -gt $global:HeartbeatMaxLogLines) {
+            $keep = [math]::Floor($global:HeartbeatMaxLogLines * 0.7)
+            $lines = Get-Content $global:HeartbeatLogPath -Tail $keep
+            $lines | Set-Content $global:HeartbeatLogPath -Encoding UTF8
+        }
+    }
+
+    # Store in SQLite if available (table created lazily, once per session)
+    if (Initialize-HeartbeatTable) {
         try {
             $conn = Get-ChatDbConnection
             $cmd = $conn.CreateCommand()
-            # Create heartbeat_runs table if not exists
-            $cmd.CommandText = "CREATE TABLE IF NOT EXISTS heartbeat_runs (id INTEGER PRIMARY KEY AUTOINCREMENT, run_at TEXT NOT NULL DEFAULT (datetime('now')), tasks_checked INTEGER, tasks_run INTEGER, log TEXT)"
-            $cmd.ExecuteNonQuery() | Out-Null
             $cmd.CommandText = "INSERT INTO heartbeat_runs (tasks_checked, tasks_run, log) VALUES (@checked, @ran, @log)"
             $cmd.Parameters.Add([Microsoft.Data.Sqlite.SqliteParameter]::new("@checked", $tasks.Count)) | Out-Null
             $cmd.Parameters.Add([Microsoft.Data.Sqlite.SqliteParameter]::new("@ran", $ran)) | Out-Null
@@ -290,6 +405,10 @@ function Register-AgentHeartbeat {
     $modulesPath = $global:ModulesPath
     $bildsypsHome = $global:BildsyPSHome
 
+    # Sanitize paths to prevent script injection via directory names
+    $escapedHome = $bildsypsHome -replace "'", "''"
+    $escapedModules = $modulesPath -replace "'", "''"
+
     # Generate bootstrap script
     $scriptsDir = "$global:BildsyPSHome\data"
     if (-not (Test-Path $scriptsDir)) { New-Item -ItemType Directory -Path $scriptsDir -Force | Out-Null }
@@ -299,32 +418,34 @@ function Register-AgentHeartbeat {
 # Auto-generated by BildsyPS Register-AgentHeartbeat -- do not edit
 # Interval: ${IntervalMinutes}m | Created: $(Get-Date -Format 'yyyy-MM-dd HH:mm')
 `$ErrorActionPreference = 'Stop'
-`$errorLog = '$bildsypsHome\logs\heartbeat_errors.log'
+`$errorLog = '$escapedHome\logs\heartbeat_errors.log'
 try {
-    `$global:BildsyPSHome = '$bildsypsHome'
-    `$global:ModulesPath = '$modulesPath'
+    `$global:BildsyPSHome = '$escapedHome'
+    `$global:ModulesPath = '$escapedModules'
 
     # Load core modules in dependency order
     `$coreModules = @(
         'ConfigLoader.ps1', 'PlatformUtils.ps1', 'SecurityUtils.ps1',
-        'CommandValidation.ps1', 'SafetySystem.ps1', 'NaturalLanguage.ps1',
-        'ResponseParser.ps1', 'ChatStorage.ps1'
+        'SecretScanner.ps1', 'CommandValidation.ps1', 'SafetySystem.ps1',
+        'NaturalLanguage.ps1', 'ResponseParser.ps1', 'CodeArtifacts.ps1',
+        'ChatStorage.ps1', 'ChatProviders.ps1'
     )
     foreach (`$mod in `$coreModules) {
         `$p = Join-Path `$global:ModulesPath `$mod
         if (Test-Path `$p) { . `$p }
     }
 
-    # Load intent system + agent
+    # Load intent system + agent (depends on ChatProviders being loaded above)
     . (Join-Path `$global:ModulesPath 'IntentAliasSystem.ps1')
-    . (Join-Path `$global:ModulesPath 'ChatProviders.ps1')
 
     # Load heartbeat module itself
     . (Join-Path `$global:ModulesPath 'AgentHeartbeat.ps1')
 
     Invoke-AgentHeartbeat
 } catch {
-    "[`$(Get-Date)] HEARTBEAT ERROR: `$(`$_.Exception.Message)" | Out-File `$errorLog -Append
+    `$logDir = Split-Path `$errorLog -Parent
+    if (-not (Test-Path `$logDir)) { New-Item -ItemType Directory -Path `$logDir -Force | Out-Null }
+    "[`$(Get-Date -Format 'o')] HEARTBEAT ERROR: `$(`$_.Exception.Message)" | Out-File `$errorLog -Append
     "`$(`$_.ScriptStackTrace)" | Out-File `$errorLog -Append
 }
 "@
@@ -334,7 +455,7 @@ try {
     try {
         $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes $IntervalMinutes)
         $action = New-ScheduledTaskAction -Execute $pwshPath -Argument "-WindowStyle Hidden -NonInteractive -File `"$scriptPath`""
-        $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
+        $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Minutes 10)
 
         Register-ScheduledTask -TaskName 'Heartbeat' -TaskPath '\BildsyPS\' `
             -Trigger $trigger -Action $action -Settings $settings `
