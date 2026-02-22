@@ -38,6 +38,13 @@ Describe 'SecretScanner — Offline' {
             $result[0].Pattern | Should -Be 'Generic Secret Assign'
         }
 
+        It 'Skips generic pattern when keyword is embedded in a larger name' {
+            $f = "$global:BildsyPSHome\config\test-embedded.txt"
+            Set-Content -Path $f -Value "`$lblApiKey = New-Object System.Windows.Forms.Label`n`$tbPassword = New-Object System.Windows.Forms.TextBox"
+            $result = Invoke-SecretScan -Paths @($f)
+            @($result).Count | Should -Be 0
+        }
+
         It 'Skips comment lines' {
             $f = "$global:BildsyPSHome\config\test-comment.txt"
             Set-Content -Path $f -Value '# OPENAI_API_KEY=sk-abcdefghijklmnopqrstuvwxyz1234567890'

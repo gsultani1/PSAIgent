@@ -49,6 +49,7 @@ RULES:
 9. Add proper form disposal and cleanup.
 10. The script must work when compiled to .exe via ps2exe.
 11. Start with: Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+12. NEVER hardcode or placeholder API keys/passwords/tokens. If the app needs credentials, create a Settings dialog where the user enters them at runtime (use PasswordChar='*' for sensitive fields) and persist to a JSON config file.
 
 Output ONLY the code block. No explanations before or after.
 '@
@@ -73,6 +74,7 @@ RULES:
    Path.home() / f'.{app_name}' / 'data.json'
 9. Use if __name__ == '__main__': guard.
 10. Use ttk widgets where possible for native look.
+11. NEVER hardcode or placeholder API keys/passwords/tokens. If the app needs credentials, create a Settings window where the user enters them at runtime (use show='*' for sensitive fields) and persist to a JSON config file.
 
 Also output a requirements.txt file (empty or "# stdlib only"):
 ```text requirements.txt
@@ -103,6 +105,7 @@ RULES:
    Path.home() / f'.{app_name}' / 'data.json'
 7. Use if __name__ == '__main__': guard in app.py.
 8. requirements.txt must contain: pywebview
+9. NEVER hardcode or placeholder API keys/passwords/tokens. If the app needs credentials, create a Settings panel where the user enters them at runtime (use <input type="password"> for sensitive fields) and persist via js_api to a JSON config file.
 
 Output ONLY the code blocks. No explanations before or after.
 '@
@@ -491,15 +494,12 @@ function Test-GeneratedCode {
             }
         }
 
-        # Secret scan — exclude 'Generic Secret Assign' for generated code because
-        # apps with API integration naturally contain $ApiKey/$Password/$Token
-        # variables with placeholder values. Specific-format patterns (Anthropic,
-        # AWS, GitHub, etc.) still catch real leaked keys.
+        # Secret scan
         if (Get-Command Invoke-SecretScan -ErrorAction SilentlyContinue) {
             $tempScan = Join-Path $env:TEMP "bildsyps_secretscan_$(Get-Random)$ext"
             try {
                 $code | Set-Content $tempScan -Encoding UTF8
-                $findings = Invoke-SecretScan -Paths @($tempScan) -ExcludePatterns @('Generic Secret Assign')
+                $findings = Invoke-SecretScan -Paths @($tempScan)
                 foreach ($f in $findings) {
                     $errors += "[$fileName] Secret detected (line $($f.Line)): $($f.Pattern) -- $($f.Masked)"
                 }
