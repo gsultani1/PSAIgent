@@ -124,6 +124,13 @@ RULES:
     init or grid refresh), use a $global:suppressEvents flag to prevent infinite recursion.
     Set $global:suppressEvents = $true BEFORE the change, $false AFTER. Check the flag at the
     top of every SelectedIndexChanged handler: if ($global:suppressEvents) { return }.
+15. When a variable is followed by a colon inside a double-quoted string, PowerShell interprets
+    it as a drive/scope qualifier (e.g. "$statusCode:" is parsed as $statusCode: drive).
+    Always use the subexpression operator: "$($statusCode):" or braces "${statusCode}:".
+16. NEVER use empty catch blocks (catch { }). Always log or display the error. At minimum use:
+    catch { Write-Host "Error: $_" -ForegroundColor Red } or show a MessageBox.
+17. NEVER use array += in a loop. It copies the entire array every iteration and is O(n²).
+    Use [System.Collections.ArrayList]::new() with .Add(), or [System.Collections.Generic.List[string]]::new().
 
 Output ONLY the code block. No explanations before or after.
 '@
@@ -139,8 +146,8 @@ RULES:
 {THEME_RULE}
 6. Add a mandatory startup splash screen (1.5 seconds):
    - 400x200 window, centered, no title bar (overrideredirect=True)
-   - Dark background (#1e1e1e), text "Built with BildsyPS" in #7c3aed, 16pt
-   - Below: app name in #e0e0e0, 12pt
+   - Use the app's theme background, text "Built with BildsyPS" in the accent color, 16pt
+   - Below: app name in the foreground color, 12pt
    - Auto-close after 1500ms via root.after()
 7. Add a Help menu with "About" that shows:
    messagebox.showinfo("About", "Built with BildsyPS\nhttps://github.com/gsultani/bildsyps")
@@ -177,7 +184,7 @@ RULES:
 3. ALLOWED imports: stdlib + pywebview + requests. Nothing else.
 {THEME_RULE}
 5. Add a branded startup splash overlay in index.html:
-   - Full-screen overlay div, dark bg, "Built with BildsyPS" in accent color
+   - Full-screen overlay div using the app's theme background, "Built with BildsyPS" in accent color
    - Fades out after 1.5 seconds via CSS animation + JS setTimeout
    - Footer: <footer style="text-align:center;padding:8px;color:#666;font-size:11px">Built with BildsyPS</footer>
 6. If the app uses data persistence, use JSON or SQLite in:
@@ -216,7 +223,7 @@ RULES:
 6. Frontend in web/: plain HTML5, vanilla ES6+ JS, CSS. No frameworks, no bundler, no npm.
 {THEME_RULE}
 8. Add a branded startup splash overlay in index.html:
-   - Full-screen overlay div, dark bg, "Built with BildsyPS" in accent color
+   - Full-screen overlay div using the app's theme background, "Built with BildsyPS" in accent color
    - Fades out after 1.5 seconds via CSS animation + JS setTimeout
    - Footer: <footer style="text-align:center;padding:8px;color:#666;font-size:11px">Built with BildsyPS</footer>
 9. If the app needs data persistence, use Tauri fs API + JSON file in the app data directory.
@@ -342,22 +349,29 @@ function Get-BuildMaxTokens {
         'o1-mini'                    = 65536
     }
 
+    $limit = 8192  # Default: safe for most providers
+
     # Exact match
     if ($Model -and $outputLimits.ContainsKey($Model)) {
-        return $outputLimits[$Model]
+        $limit = $outputLimits[$Model]
     }
-
-    # Fuzzy match: check if model name contains a known key (longest key first for specificity)
-    if ($Model) {
-        foreach ($key in ($outputLimits.Keys | Sort-Object { $_.Length } -Descending)) {
-            if ($Model -like "*$key*") {
-                return $outputLimits[$key]
+    else {
+        # Fuzzy match: check if model name contains a known key (longest key first for specificity)
+        if ($Model) {
+            foreach ($key in ($outputLimits.Keys | Sort-Object { $_.Length } -Descending)) {
+                if ($Model -like "*$key*") {
+                    $limit = $outputLimits[$key]
+                    break
+                }
             }
         }
     }
 
-    # Default: 8192 is safe for most providers
-    return 8192
+    # Cap at 16384 for code generation — a full app fits in ~15K tokens.
+    # Requesting 64K+ causes multi-minute responses that drop connections.
+    # Users can bypass this cap with -MaxTokens if they really need more.
+    $buildCap = 16384
+    return [math]::Min($limit, $buildCap)
 }
 
 # ===== Prompt Refinement =====
@@ -372,7 +386,7 @@ function Invoke-PromptRefinement {
         [Parameter(Mandatory)][string]$Framework,
         [string]$Provider,
         [string]$Model,
-        [string]$Theme = 'dark'
+        [string]$Theme = 'system'
     )
 
     $frameworkLabel = switch ($Framework) {
@@ -433,7 +447,7 @@ function Invoke-CodeGeneration {
         [int]$MaxTokens,
         [string]$Provider,
         [string]$Model,
-        [string]$Theme = 'dark'
+        [string]$Theme = 'system'
     )
 
     $systemPrompt = switch ($Framework) {
@@ -564,6 +578,75 @@ function Invoke-CodeGeneration {
     catch {
         return @{ Success = $false; Output = "Code generation failed: $($_.Exception.Message)" }
     }
+}
+
+# ===== Code Repair (pre-validation) =====
+
+function Repair-GeneratedCode {
+    <#
+    .SYNOPSIS
+    Auto-repair common LLM code generation mistakes before validation.
+    Uses the PowerShell parser to locate exact error positions and fix them.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][hashtable]$Files,
+        [Parameter(Mandatory)][string]$Framework
+    )
+
+    $totalFixes = 0
+    $knownScopes = @('global','local','script','private','using','workflow','env','variable','function','alias')
+
+    foreach ($fileName in @($Files.Keys)) {
+        $ext = [System.IO.Path]::GetExtension($fileName).ToLower()
+        if ($ext -ne '.ps1') { continue }
+
+        $code = $Files[$fileName]
+        $fileFixes = 0
+        $maxPasses = 30
+
+        for ($pass = 0; $pass -lt $maxPasses; $pass++) {
+            $tokens = $null
+            $errors = $null
+            $null = [System.Management.Automation.Language.Parser]::ParseInput($code, [ref]$tokens, [ref]$errors)
+
+            $varErr = $errors | Where-Object { $_.Message -match 'Variable reference is not valid' } | Select-Object -First 1
+            if (-not $varErr) { break }
+
+            $startOff = $varErr.Extent.StartOffset
+            $errText  = $varErr.Extent.Text
+
+            if ($varErr.Message -match "':' was not followed") {
+                # Pattern: $varName: where varName is not a valid scope
+                if ($errText -match '^\$(\w+):') {
+                    $varName = $Matches[1]
+                    if ($knownScopes -contains $varName.ToLower()) {
+                        $code = $code.Substring(0, $startOff) + '`' + $code.Substring($startOff)
+                    }
+                    else {
+                        $endOff = $startOff + $errText.Length
+                        $code = $code.Substring(0, $startOff) + "`$(`$$varName):" + $code.Substring($endOff)
+                    }
+                }
+                else {
+                    $code = $code.Substring(0, $startOff) + '`' + $code.Substring($startOff)
+                }
+                $fileFixes++
+            }
+            else {
+                # Pattern: bare $ not followed by valid variable name char — escape it
+                $code = $code.Substring(0, $startOff) + '`$' + $code.Substring($startOff + 1)
+                $fileFixes++
+            }
+        }
+
+        if ($fileFixes -gt 0) {
+            $Files[$fileName] = $code
+            $totalFixes += $fileFixes
+        }
+    }
+
+    return $totalFixes
 }
 
 # ===== Code Validation =====
@@ -1345,7 +1428,7 @@ function New-AppBuild {
         [string]$Provider,
         [string]$Model,
         [switch]$NoBranding,
-        [ValidateSet('dark','light','system')][string]$Theme = 'dark',
+        [ValidateSet('dark','light','system')][string]$Theme = 'system',
         [string]$IconPath
     )
 
@@ -1405,6 +1488,12 @@ function New-AppBuild {
     }
 
     Write-Host "[AppBuilder] Generated $($codeResult.Files.Count) file(s)" -ForegroundColor Cyan
+
+    # Step 3b: Auto-repair common LLM syntax mistakes
+    $repairCount = Repair-GeneratedCode -Files $codeResult.Files -Framework $framework
+    if ($repairCount -gt 0) {
+        Write-Host "[AppBuilder] Auto-repaired $repairCount syntax issue(s)" -ForegroundColor Yellow
+    }
 
     # Step 4: Validate
     Write-Host "[AppBuilder] Validating code..." -ForegroundColor Cyan
@@ -1485,7 +1574,7 @@ function Update-AppBuild {
         [Parameter(Mandatory)][string]$Changes,
         [string]$Provider,
         [string]$Model,
-        [ValidateSet('dark','light','system')][string]$Theme = 'dark'
+        [ValidateSet('dark','light','system')][string]$Theme = 'system'
     )
 
     $sourceDir = Join-Path $global:AppBuilderPath "$Name\source"
@@ -1617,6 +1706,16 @@ function Update-AppBuild {
             $fileDir = Split-Path $filePath -Parent
             if (-not (Test-Path $fileDir)) { New-Item -ItemType Directory -Path $fileDir -Force | Out-Null }
             $files[$fn] | Set-Content $filePath -Encoding UTF8
+        }
+
+        # Auto-repair
+        $repairCount = Repair-GeneratedCode -Files $files -Framework $framework
+        if ($repairCount -gt 0) {
+            Write-Host "[AppBuilder] Auto-repaired $repairCount syntax issue(s)" -ForegroundColor Yellow
+            foreach ($fn in $files.Keys) {
+                $filePath = Join-Path $sourceDir $fn
+                $files[$fn] | Set-Content $filePath -Encoding UTF8
+            }
         }
 
         # Validate

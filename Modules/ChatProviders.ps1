@@ -463,61 +463,89 @@ function Invoke-AnthropicChat {
     
     $jsonBody = $body | ConvertTo-Json -Depth 10
     
-    $headers = @{
-        "Content-Type"      = "application/json"
-        "x-api-key"         = $ApiKey
-        "anthropic-version" = "2023-06-01"
-    }
-    
-    $maxRetries = 3
+    $maxRetries = 5
     $attempt = 0
     $lastError = $null
 
-    while ($attempt -lt $maxRetries) {
-        $attempt++
-        try {
-            $apiResponse = Invoke-RestMethod -Uri $Endpoint -Method Post -Body ([System.Text.Encoding]::UTF8.GetBytes($jsonBody)) -Headers $headers -ContentType 'application/json; charset=utf-8' -TimeoutSec $TimeoutSec -ErrorAction Stop
+    # Use HttpClient for reliable large response handling (Invoke-RestMethod drops connections on big payloads)
+    $handler = [System.Net.Http.HttpClientHandler]::new()
+    $handler.AutomaticDecompression = [System.Net.DecompressionMethods]::GZip -bor [System.Net.DecompressionMethods]::Deflate
+    $client = [System.Net.Http.HttpClient]::new($handler)
+    $client.Timeout = [TimeSpan]::FromSeconds($TimeoutSec)
 
-            if ($null -eq $apiResponse.content -or $apiResponse.content.Count -eq 0) {
-                throw "Anthropic returned empty response"
-            }
+    try {
+        while ($attempt -lt $maxRetries) {
+            $attempt++
+            try {
+                $requestContent = [System.Net.Http.StringContent]::new($jsonBody, [System.Text.Encoding]::UTF8, 'application/json')
+                $request = [System.Net.Http.HttpRequestMessage]::new([System.Net.Http.HttpMethod]::Post, $Endpoint)
+                $request.Content = $requestContent
+                $request.Headers.Add('x-api-key', $ApiKey)
+                $request.Headers.Add('anthropic-version', '2023-06-01')
 
-            $reply = ($apiResponse.content | Where-Object { $_.type -eq 'text' } | Select-Object -First 1).text
-            if ([string]::IsNullOrWhiteSpace($reply)) {
-                throw "Anthropic returned empty message content"
-            }
+                # Read response with streaming to avoid premature connection drops
+                $httpResponse = $client.SendAsync($request, [System.Net.Http.HttpCompletionOption]::ResponseHeadersRead).GetAwaiter().GetResult()
+                $responseBody = $httpResponse.Content.ReadAsStringAsync().GetAwaiter().GetResult()
 
-            return @{
-                Content    = $reply
-                Model      = $apiResponse.model
-                Usage      = @{
-                    prompt_tokens     = $apiResponse.usage.input_tokens
-                    completion_tokens = $apiResponse.usage.output_tokens
-                    total_tokens      = $apiResponse.usage.input_tokens + $apiResponse.usage.output_tokens
+                if (-not $httpResponse.IsSuccessStatusCode) {
+                    $statusCode = [int]$httpResponse.StatusCode
+                    # Rate limit or server error — retryable
+                    if ($statusCode -ge 429) {
+                        throw "HTTP $statusCode`: $responseBody"
+                    }
+                    # Client error — not retryable
+                    throw "Anthropic API error (HTTP $statusCode`): $responseBody"
                 }
-                StopReason = $apiResponse.stop_reason
-            }
-        }
-        catch {
-            $lastError = $_
-            $ex = $_.Exception
-            $detail = $ex.Message
-            while ($ex.InnerException) {
-                $ex = $ex.InnerException
-                $detail += " -> [$($ex.GetType().Name)] $($ex.Message)"
-            }
 
-            if ($attempt -lt $maxRetries) {
-                $wait = $attempt * 5
-                Write-Host "[Anthropic] Attempt $attempt/$maxRetries failed: $detail" -ForegroundColor Yellow
-                Write-Host "[Anthropic] Retrying in ${wait}s..." -ForegroundColor Yellow
-                Start-Sleep -Seconds $wait
+                $apiResponse = $responseBody | ConvertFrom-Json
+
+                if ($null -eq $apiResponse.content -or $apiResponse.content.Count -eq 0) {
+                    throw "Anthropic returned empty response"
+                }
+
+                $reply = ($apiResponse.content | Where-Object { $_.type -eq 'text' } | Select-Object -First 1).text
+                if ([string]::IsNullOrWhiteSpace($reply)) {
+                    throw "Anthropic returned empty message content"
+                }
+
+                return @{
+                    Content    = $reply
+                    Model      = $apiResponse.model
+                    Usage      = @{
+                        prompt_tokens     = $apiResponse.usage.input_tokens
+                        completion_tokens = $apiResponse.usage.output_tokens
+                        total_tokens      = $apiResponse.usage.input_tokens + $apiResponse.usage.output_tokens
+                    }
+                    StopReason = $apiResponse.stop_reason
+                }
             }
-            else {
-                Write-Host "[Anthropic] All $maxRetries attempts failed: $detail" -ForegroundColor Red
-                throw $lastError
+            catch {
+                $lastError = $_
+                $ex = $_.Exception
+                $detail = $ex.Message
+                while ($ex.InnerException) {
+                    $ex = $ex.InnerException
+                    $detail += " -> [$($ex.GetType().Name)] $($ex.Message)"
+                }
+
+                if ($attempt -lt $maxRetries) {
+                    $base = [math]::Pow(2, $attempt) * 2
+                    $jitter = Get-Random -Minimum 0 -Maximum ([math]::Max(1, [int]($base * 0.3)))
+                    $wait = [int]$base + $jitter
+                    Write-Host "[Anthropic] Attempt $attempt/$maxRetries failed: $detail" -ForegroundColor Yellow
+                    Write-Host "[Anthropic] Retrying in ${wait}s..." -ForegroundColor Yellow
+                    Start-Sleep -Seconds $wait
+                }
+                else {
+                    Write-Host "[Anthropic] All $maxRetries attempts failed: $detail" -ForegroundColor Red
+                    throw $lastError
+                }
             }
         }
+    }
+    finally {
+        $client.Dispose()
+        $handler.Dispose()
     }
 }
 

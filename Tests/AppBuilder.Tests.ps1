@@ -76,14 +76,14 @@ Describe 'AppBuilder — Offline' {
                 Should -Be 16384
         }
 
-        It 'Returns 64000 for claude-sonnet-4-6' {
+        It 'Returns 16384 (capped) for claude-sonnet-4-6' {
             Get-BuildMaxTokens -Framework 'powershell' -Model 'claude-sonnet-4-6' |
-                Should -Be 64000
+                Should -Be 16384
         }
 
-        It 'Returns 128000 for claude-opus-4-6' {
+        It 'Returns 16384 (capped) for claude-opus-4-6' {
             Get-BuildMaxTokens -Framework 'powershell' -Model 'claude-opus-4-6' |
-                Should -Be 128000
+                Should -Be 16384
         }
 
         It 'Returns default 8192 for unknown models' {
