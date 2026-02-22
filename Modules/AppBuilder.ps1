@@ -6,6 +6,61 @@
 $global:AppBuilderPath = "$global:BildsyPSHome\builds"
 $global:AppBuilderBranding = $true  # inject "Built with BildsyPS" branding
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# Extracted Data Tables (script-scope)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# ── Dangerous pattern definitions (split by language) ──
+$script:DangerousPythonPatterns = @(
+    @{ Pattern = '\beval\s*\(';          Name = 'eval()' }
+    @{ Pattern = '\bexec\s*\(';          Name = 'exec()' }
+    @{ Pattern = '\b__import__\s*\(';    Name = '__import__()' }
+    @{ Pattern = '\bpickle\.loads\s*\('; Name = 'pickle.loads()' }
+    @{ Pattern = '\bmarshal\.loads\s*\('; Name = 'marshal.loads()' }
+    @{ Pattern = '\bos\.popen\s*\(';     Name = 'os.popen()' }
+    @{ Pattern = '\bos\.system\s*\(';    Name = 'os.system()' }
+    @{ Pattern = '\bsubprocess\b';       Name = 'subprocess' }
+)
+
+$script:DangerousPowerShellPatterns = @(
+    @{ Pattern = '\bInvoke-Expression\b'; Name = 'Invoke-Expression' }
+    @{ Pattern = '\biex\s';              Name = 'iex (Invoke-Expression alias)' }
+    @{ Pattern = 'Remove-Item\b.*-Recurse'; Name = 'Remove-Item -Recurse' }
+    @{ Pattern = 'Start-Process\b.*-Verb\s+RunAs'; Name = 'Start-Process -Verb RunAs' }
+)
+
+# ── PS7+ compatibility patterns (applied to .ps1 files only) ──
+$script:PS7CompatPatterns = @(
+    @{ Pattern = '\?\?';  Name = 'null-coalescing operator ?? (PS7+ only, breaks ps2exe)' }
+    @{ Pattern = '\?\.';  Name = 'null-conditional operator ?. (PS7+ only, breaks ps2exe)' }
+    @{ Pattern = '\?\[';  Name = 'null-conditional index ?[] (PS7+ only, breaks ps2exe)' }
+)
+
+# ── Theme presets (per-framework rule text, keyed by theme name) ──
+$script:ThemePresets = @{
+    dark = @{
+        powershell   = '6. Dark theme: Background=#1e1e1e, Foreground=#e0e0e0, Accent=#7c3aed, Font=Segoe UI'
+        'python-tk'  = '5. Dark theme: bg=#1e1e1e, fg=#e0e0e0, accent=#7c3aed, font=("Segoe UI", 10)'
+        'python-web' = '4. Dark theme in CSS: background=#1e1e1e, color=#e0e0e0, accent=#7c3aed, font-family="Segoe UI"'
+        tauri        = '7. Dark theme in CSS: background=#1e1e1e, color=#e0e0e0, accent=#7c3aed, font-family="Segoe UI".'
+        refine       = '- dark theme (#1e1e1e background, #7c3aed accent, Segoe UI font)'
+    }
+    light = @{
+        powershell   = '6. Light theme: Background=#f5f5f5, Foreground=#1e1e1e, Accent=#0078d4, Font=Segoe UI'
+        'python-tk'  = '5. Light theme: bg=#f5f5f5, fg=#1e1e1e, accent=#0078d4, font=("Segoe UI", 10)'
+        'python-web' = '4. Light theme in CSS: background=#f5f5f5, color=#1e1e1e, accent=#0078d4, font-family="Segoe UI"'
+        tauri        = '7. Light theme in CSS: background=#f5f5f5, color=#1e1e1e, accent=#0078d4, font-family="Segoe UI".'
+        refine       = '- light theme (#f5f5f5 background, #0078d4 blue accent, Segoe UI font)'
+    }
+    system = @{
+        powershell   = '6. Use Windows native system colors. Do NOT hardcode Background, Foreground, or Accent hex values. Let WinForms inherit SystemColors defaults. Font=Segoe UI'
+        'python-tk'  = '5. Use the OS native theme. Do NOT override bg/fg colors. Let ttk themed widgets use default system appearance. font=("Segoe UI", 10)'
+        'python-web' = '4. System-adaptive CSS: use @media (prefers-color-scheme) for dark/light mode. Default to light with CSS system colors (Canvas, CanvasText, Highlight). font-family="Segoe UI"'
+        tauri        = '7. System-adaptive CSS: use @media (prefers-color-scheme) for dark/light mode. Default to light with CSS system colors (Canvas, CanvasText, Highlight). font-family="Segoe UI".'
+        refine       = '- native OS theme (respect system light/dark preference, no hardcoded colors, Segoe UI font)'
+    }
+}
+
 # ===== System Prompts =====
 
 $script:BuilderRefinePrompt = @'
@@ -25,7 +80,7 @@ DATA_MODEL:
 UI_LAYOUT:
 - describe windows, panels, menus, buttons, layout
 STYLING:
-- dark theme (#1e1e1e background, #7c3aed accent, Segoe UI font)
+{THEME_STYLE}
 EDGE_CASES:
 - input validation, error states, empty states
 ---END SPECIFICATION---
@@ -42,7 +97,10 @@ RULES:
 3. Do NOT use any external modules. No Install-Module calls. No NuGet packages.
 4. All code must be in a single file. No dot-sourcing other scripts.
 5. Use proper error handling with try/catch blocks.
-6. Dark theme: Background=#1e1e1e, Foreground=#e0e0e0, Accent=#7c3aed, Font=Segoe UI
+{THEME_RULE}
+6b. Use structured layout controls: TableLayoutPanel for grid alignment, SplitContainer for
+    resizable panes, MenuStrip for menus (not manual button bars). Dock and Anchor controls
+    so the UI scales correctly when resized.
 7. Add a Help menu with an "About" item that shows a MessageBox:
    "Built with BildsyPS — AI-powered shell orchestrator`nhttps://github.com/gsultani/bildsyps"
 8. If the app uses data persistence, store ALL data files (JSON, SQLite, logs, config) in:
@@ -62,6 +120,10 @@ RULES:
     etc.) are scoped locally. To share data between a handler and its parent function, store
     values on the Form's .Tag property, a hashtable, or an ArrayList (reference types).
     NEVER rely on bare $variable = value inside handlers to update parent-scope variables.
+14. CRITICAL: When programmatically setting SelectedIndex on a ComboBox or ListBox (e.g. during
+    init or grid refresh), use a $global:suppressEvents flag to prevent infinite recursion.
+    Set $global:suppressEvents = $true BEFORE the change, $false AFTER. Check the flag at the
+    top of every SelectedIndexChanged handler: if ($global:suppressEvents) { return }.
 
 Output ONLY the code block. No explanations before or after.
 '@
@@ -74,7 +136,7 @@ RULES:
 2. Use ONLY Python standard library imports. No pip packages. No external dependencies.
 3. All code in a single file. No separate modules.
 4. Use proper error handling with try/except blocks.
-5. Dark theme: bg=#1e1e1e, fg=#e0e0e0, accent=#7c3aed, font=("Segoe UI", 10)
+{THEME_RULE}
 6. Add a mandatory startup splash screen (1.5 seconds):
    - 400x200 window, centered, no title bar (overrideredirect=True)
    - Dark background (#1e1e1e), text "Built with BildsyPS" in #7c3aed, 16pt
@@ -86,6 +148,8 @@ RULES:
    Path.home() / f'.{app_name}' / 'data.json'
 9. Use if __name__ == '__main__': guard.
 10. Use ttk widgets where possible for native look.
+10b. Use grid() geometry manager for all widget placement (not pack() or place()). Define
+    row/column weights so the UI resizes proportionally.
 11. NEVER hardcode or generate placeholder API keys, tokens, passwords, or secrets in the code.
     If the app needs API credentials, create a Settings window where the user can enter their own
     key at runtime. Persist settings to the app's JSON config file (see rule 8). Mask the key
@@ -111,7 +175,7 @@ RULES:
    ```text requirements.txt
 2. app.py: import webview, create window loading web/index.html, expose Python API class via js_api
 3. ALLOWED imports: stdlib + pywebview + requests. Nothing else.
-4. Dark theme in CSS: background=#1e1e1e, color=#e0e0e0, accent=#7c3aed, font-family="Segoe UI"
+{THEME_RULE}
 5. Add a branded startup splash overlay in index.html:
    - Full-screen overlay div, dark bg, "Built with BildsyPS" in accent color
    - Fades out after 1.5 seconds via CSS animation + JS setTimeout
@@ -143,12 +207,14 @@ RULES:
 2. src-tauri/Cargo.toml: use tauri 2.x with features ["devtools"]. Name the package after the app.
 3. src-tauri/src/main.rs: use tauri::Builder, register any Tauri commands with #[tauri::command].
    Expose backend functions to the frontend via invoke(). Use serde for serialization.
-4. src-tauri/tauri.conf.json: set identifier to "com.bildsyps.<appname>", productName, version "0.1.0".
-   Set build.devPath to "../web" and build.distDir to "../web".
-   Under allowlist, enable needed APIs (fs, dialog, path, etc.) as required by the spec.
+4. src-tauri/tauri.conf.json (Tauri v2 format):
+   - "identifier": "com.bildsyps.<appname>", "productName": "<App Name>", "version": "0.1.0"
+   - "build": { "frontendDist": "../web" }  — NO devPath or distDir (those are Tauri v1).
+   - Do NOT include devUrl unless you are using a live dev server.
+   - Do NOT include an "allowlist" object (that is Tauri v1). Use "app": { "security": { "csp": null } } if needed.
 5. src-tauri/build.rs: standard tauri_build::build() call.
 6. Frontend in web/: plain HTML5, vanilla ES6+ JS, CSS. No frameworks, no bundler, no npm.
-7. Dark theme in CSS: background=#1e1e1e, color=#e0e0e0, accent=#7c3aed, font-family="Segoe UI".
+{THEME_RULE}
 8. Add a branded startup splash overlay in index.html:
    - Full-screen overlay div, dark bg, "Built with BildsyPS" in accent color
    - Fades out after 1.5 seconds via CSS animation + JS setTimeout
@@ -201,6 +267,7 @@ function Get-BuildFramework {
     .SYNOPSIS
     Deterministic keyword-based framework routing. AI is NOT trusted for this decision.
     #>
+    [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$Prompt,
         [string]$Framework
@@ -248,6 +315,7 @@ function Get-BuildMaxTokens {
     Determine max output tokens for code generation based on the model's actual output limit.
     No artificial caps — uses the model's real max output capacity.
     #>
+    [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$Framework,
         [string]$Model,
@@ -303,7 +371,8 @@ function Invoke-PromptRefinement {
         [Parameter(Mandatory)][string]$Prompt,
         [Parameter(Mandatory)][string]$Framework,
         [string]$Provider,
-        [string]$Model
+        [string]$Model,
+        [string]$Theme = 'dark'
     )
 
     $frameworkLabel = switch ($Framework) {
@@ -313,7 +382,9 @@ function Invoke-PromptRefinement {
         'tauri'      { 'TAURI_V2 (Rust backend + HTML/CSS/JS frontend, native desktop app)' }
     }
 
+    $themeStyle = $script:ThemePresets[$Theme]['refine']
     $systemPrompt = $script:BuilderRefinePrompt -replace '\{FRAMEWORK_PLACEHOLDER\}', $frameworkLabel
+    $systemPrompt = $systemPrompt -replace '\{THEME_STYLE\}', $themeStyle
 
     $messages = @(
         @{ role = 'user'; content = "Build me this app: $Prompt" }
@@ -361,7 +432,8 @@ function Invoke-CodeGeneration {
         [Parameter(Mandatory)][string]$Framework,
         [int]$MaxTokens,
         [string]$Provider,
-        [string]$Model
+        [string]$Model,
+        [string]$Theme = 'dark'
     )
 
     $systemPrompt = switch ($Framework) {
@@ -370,6 +442,9 @@ function Invoke-CodeGeneration {
         'python-web' { $script:BuilderPyWebViewPrompt }
         'tauri'      { $script:BuilderTauriPrompt }
     }
+
+    $themeRule = $script:ThemePresets[$Theme][$Framework]
+    $systemPrompt = $systemPrompt -replace '\{THEME_RULE\}', $themeRule
 
     $messages = @(
         @{ role = 'user'; content = "Generate the application from this specification:`n`n$Spec" }
@@ -498,12 +573,13 @@ function Test-GeneratedCode {
     .SYNOPSIS
     Validate generated code: syntax check, security scan, import validation.
     #>
+    [CmdletBinding()]
     param(
         [Parameter(Mandatory)][hashtable]$Files,
         [Parameter(Mandatory)][string]$Framework
     )
 
-    $errors = @()
+    $errors = [System.Collections.Generic.List[string]]::new()
 
     foreach ($fileName in $Files.Keys) {
         $code = $Files[$fileName]
@@ -519,7 +595,7 @@ function Test-GeneratedCode {
                 [System.Management.Automation.Language.Parser]::ParseFile($tempFile, [ref]$tokens, [ref]$parseErrors) | Out-Null
                 if ($parseErrors.Count -gt 0) {
                     foreach ($pe in $parseErrors) {
-                        $errors += "[$fileName] Syntax error line $($pe.Extent.StartLineNumber): $($pe.Message)"
+                        $errors.Add("[$fileName] Syntax error line $($pe.Extent.StartLineNumber): $($pe.Message)")
                     }
                 }
             }
@@ -533,56 +609,39 @@ function Test-GeneratedCode {
                     $result = & python -c "import ast; ast.parse(open(r'$tempFile', encoding='utf-8').read()); print('OK')" 2>&1
                     $resultStr = $result | Out-String
                     if ($resultStr -notmatch 'OK') {
-                        $errors += "[$fileName] Python syntax error: $resultStr"
+                        $errors.Add("[$fileName] Python syntax error: $resultStr")
                     }
                 }
                 finally { Remove-Item $tempFile -Force -ErrorAction SilentlyContinue }
             }
         }
-
         elseif ($ext -eq '.rs') {
             if (Get-Command cargo -ErrorAction SilentlyContinue) {
-                # Light syntax check: attempt to parse with rustc --edition 2021
-                # Skip for now — cargo check requires a full project. Just ensure it's not empty.
                 if (-not $code -or $code.Trim().Length -lt 10) {
-                    $errors += "[$fileName] Rust file appears empty or trivially small"
+                    $errors.Add("[$fileName] Rust file appears empty or trivially small")
                 }
             }
         }
 
         # PS 5.1 compatibility: reject PS7+ only operators in .ps1 files
         if ($ext -eq '.ps1') {
-            $compatPatterns = @(
-                @{ Pattern = '\?\?';  Name = 'null-coalescing operator ?? (PS7+ only, breaks ps2exe)' }
-                @{ Pattern = '\?\.';  Name = 'null-conditional operator ?. (PS7+ only, breaks ps2exe)' }
-                @{ Pattern = '\?\[';  Name = 'null-conditional index ?[] (PS7+ only, breaks ps2exe)' }
-            )
-            foreach ($cp in $compatPatterns) {
+            foreach ($cp in $script:PS7CompatPatterns) {
                 if ($code -match $cp.Pattern) {
-                    $errors += "[$fileName] Compatibility: contains $($cp.Name)"
+                    $errors.Add("[$fileName] Compatibility: contains $($cp.Name)")
                 }
             }
         }
 
-        # Security scan: dangerous patterns
-        $dangerousPatterns = @(
-            @{ Pattern = '\beval\s*\(';        Name = 'eval()' }
-            @{ Pattern = '\bexec\s*\(';        Name = 'exec()' }
-            @{ Pattern = '\b__import__\s*\(';  Name = '__import__()' }
-            @{ Pattern = '\bpickle\.loads\s*\('; Name = 'pickle.loads()' }
-            @{ Pattern = '\bmarshal\.loads\s*\('; Name = 'marshal.loads()' }
-            @{ Pattern = '\bos\.popen\s*\(';   Name = 'os.popen()' }
-            @{ Pattern = '\bos\.system\s*\(';  Name = 'os.system()' }
-            @{ Pattern = '\bsubprocess\b';     Name = 'subprocess' }
-            @{ Pattern = '\bInvoke-Expression\b'; Name = 'Invoke-Expression' }
-            @{ Pattern = '\biex\s';            Name = 'iex (Invoke-Expression alias)' }
-            @{ Pattern = 'Remove-Item\b.*-Recurse'; Name = 'Remove-Item -Recurse' }
-            @{ Pattern = 'Start-Process\b.*-Verb\s+RunAs'; Name = 'Start-Process -Verb RunAs' }
-        )
+        # Security scan: language-aware dangerous patterns
+        $dangerousPatterns = switch ($ext) {
+            '.ps1' { $script:DangerousPowerShellPatterns }
+            '.py'  { $script:DangerousPythonPatterns }
+            default { $script:DangerousPowerShellPatterns + $script:DangerousPythonPatterns }
+        }
 
         foreach ($dp in $dangerousPatterns) {
             if ($code -match $dp.Pattern) {
-                $errors += "[$fileName] Security: contains $($dp.Name)"
+                $errors.Add("[$fileName] Security: contains $($dp.Name)")
             }
         }
 
@@ -593,7 +652,7 @@ function Test-GeneratedCode {
                 $code | Set-Content $tempScan -Encoding UTF8
                 $findings = Invoke-SecretScan -Paths @($tempScan)
                 foreach ($f in $findings) {
-                    $errors += "[$fileName] Secret detected (line $($f.Line)): $($f.Pattern) -- $($f.Masked)"
+                    $errors.Add("[$fileName] Secret detected (line $($f.Line)): $($f.Pattern) -- $($f.Masked)")
                 }
             }
             finally { Remove-Item $tempScan -Force -ErrorAction SilentlyContinue }
@@ -601,7 +660,7 @@ function Test-GeneratedCode {
     }
 
     if ($errors.Count -gt 0) {
-        return @{ Success = $false; Errors = $errors }
+        return @{ Success = $false; Errors = @($errors) }
     }
     return @{ Success = $true; Errors = @() }
 }
@@ -613,6 +672,7 @@ function Invoke-BildsyPSBranding {
     .SYNOPSIS
     Verify branding is present in generated code. Patch it in if LLM omitted it.
     #>
+    [CmdletBinding()]
     param(
         [Parameter(Mandatory)][hashtable]$Files,
         [Parameter(Mandatory)][string]$Framework,
@@ -716,6 +776,7 @@ function Get-SafeBuildName {
     Sanitize a build name for safe filesystem use.
     Strips invalid characters, trims whitespace, lowercases, and caps length at 40.
     #>
+    [CmdletBinding()]
     param(
         [Parameter(Mandatory = $false)]
         [AllowEmptyString()]
@@ -948,6 +1009,63 @@ function Build-TauriExecutable {
             return @{ Success = $false; Output = "src-tauri/Cargo.toml not found" }
         }
 
+        # Patch tauri.conf.json: fix common LLM mistakes (v1 keys, invalid devUrl)
+        $confPath = Join-Path $tauriDir 'tauri.conf.json'
+        if (Test-Path $confPath) {
+            try {
+                $conf = Get-Content $confPath -Raw -Encoding UTF8 | ConvertFrom-Json
+                $patched = $false
+
+                # Fix v1 build keys → v2 frontendDist
+                if ($conf.build) {
+                    if ($conf.build.PSObject.Properties['devPath']) {
+                        $distVal = $conf.build.devPath
+                        $conf.build.PSObject.Properties.Remove('devPath')
+                        if (-not $conf.build.PSObject.Properties['frontendDist']) {
+                            $conf.build | Add-Member -NotePropertyName 'frontendDist' -NotePropertyValue $distVal
+                        }
+                        $patched = $true
+                    }
+                    if ($conf.build.PSObject.Properties['distDir']) {
+                        $distVal = $conf.build.distDir
+                        $conf.build.PSObject.Properties.Remove('distDir')
+                        if (-not $conf.build.PSObject.Properties['frontendDist']) {
+                            $conf.build | Add-Member -NotePropertyName 'frontendDist' -NotePropertyValue $distVal
+                        }
+                        $patched = $true
+                    }
+                    # Remove devUrl if it's a file path (not a URL)
+                    if ($conf.build.PSObject.Properties['devUrl'] -and $conf.build.devUrl -notmatch '^https?://') {
+                        $conf.build.PSObject.Properties.Remove('devUrl')
+                        $patched = $true
+                    }
+                    # Ensure frontendDist exists
+                    if (-not $conf.build.PSObject.Properties['frontendDist']) {
+                        $conf.build | Add-Member -NotePropertyName 'frontendDist' -NotePropertyValue '../web'
+                        $patched = $true
+                    }
+                }
+                else {
+                    $conf | Add-Member -NotePropertyName 'build' -NotePropertyValue ([PSCustomObject]@{ frontendDist = '../web' })
+                    $patched = $true
+                }
+
+                # Remove v1 allowlist if present
+                if ($conf.PSObject.Properties['allowlist']) {
+                    $conf.PSObject.Properties.Remove('allowlist')
+                    $patched = $true
+                }
+
+                if ($patched) {
+                    Write-Host "[AppBuilder] Patched tauri.conf.json (fixed v1/v2 config issues)" -ForegroundColor Yellow
+                    $conf | ConvertTo-Json -Depth 10 | Set-Content $confPath -Encoding UTF8
+                }
+            }
+            catch {
+                Write-Host "[AppBuilder] Warning: Could not patch tauri.conf.json: $($_.Exception.Message)" -ForegroundColor Yellow
+            }
+        }
+
         # Optionally inject icon
         if ($IconPath -and (Test-Path $IconPath)) {
             $iconDir = Join-Path $tauriDir 'icons'
@@ -1076,6 +1194,8 @@ function Get-AppBuilds {
     .SYNOPSIS
     List all builds, most recent first.
     #>
+    [CmdletBinding()]
+    param()
 
     # Try SQLite first
     if (Initialize-BuildsTable) {
@@ -1157,6 +1277,7 @@ function Remove-AppBuild {
     .SYNOPSIS
     Delete a build by name.
     #>
+    [CmdletBinding()]
     param([Parameter(Mandatory)][string]$Name)
 
     $buildDir = Join-Path $global:AppBuilderPath $Name
@@ -1192,7 +1313,7 @@ function New-AppBuild {
     Natural language description of the app to build.
 
     .PARAMETER Framework
-    Force a specific framework: powershell (default), python-tk, python-web.
+    Force a specific framework: powershell (default), python-tk, python-web, tauri.
 
     .PARAMETER Name
     App name for the executable. Auto-generated from spec if omitted.
@@ -1209,9 +1330,13 @@ function New-AppBuild {
     .PARAMETER NoBranding
     Skip BildsyPS branding injection.
 
+    .PARAMETER Theme
+    UI color scheme: dark (default), light, or system (native OS colors).
+
     .PARAMETER IconPath
     Path to .ico file for the executable.
     #>
+    [CmdletBinding()]
     param(
         [Parameter(Mandatory)][AllowEmptyString()][string]$Prompt,
         [string]$Framework,
@@ -1220,6 +1345,7 @@ function New-AppBuild {
         [string]$Provider,
         [string]$Model,
         [switch]$NoBranding,
+        [ValidateSet('dark','light','system')][string]$Theme = 'dark',
         [string]$IconPath
     )
 
@@ -1249,7 +1375,7 @@ function New-AppBuild {
 
     # Step 2: Prompt refinement
     Write-Host "[AppBuilder] Refining prompt..." -ForegroundColor Cyan
-    $refineResult = Invoke-PromptRefinement -Prompt $Prompt -Framework $framework -Provider $Provider -Model $Model
+    $refineResult = Invoke-PromptRefinement -Prompt $Prompt -Framework $framework -Provider $Provider -Model $Model -Theme $Theme
     if (-not $refineResult.Success) {
         Write-Host "[AppBuilder] FAILED: $($refineResult.Output)" -ForegroundColor Red
         return $refineResult
@@ -1270,7 +1396,7 @@ function New-AppBuild {
     # Step 3: Code generation
     $codeMaxTokens = Get-BuildMaxTokens -Framework $framework -Model $resolvedModel -Override $MaxTokens
     $codeResult = Invoke-CodeGeneration -Spec $refineResult.Spec -Framework $framework `
-        -MaxTokens $codeMaxTokens -Provider $Provider -Model $Model
+        -MaxTokens $codeMaxTokens -Provider $Provider -Model $Model -Theme $Theme
     if (-not $codeResult.Success) {
         Write-Host "[AppBuilder] FAILED: $($codeResult.Output)" -ForegroundColor Red
         Save-BuildRecord -Name $Name -Framework $framework -Prompt $Prompt -Status 'failed' `
@@ -1353,11 +1479,13 @@ function Update-AppBuild {
     .SYNOPSIS
     Modify an existing build using FIND/REPLACE diff-based edits, then rebuild.
     #>
+    [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$Name,
         [Parameter(Mandatory)][string]$Changes,
         [string]$Provider,
-        [string]$Model
+        [string]$Model,
+        [ValidateSet('dark','light','system')][string]$Theme = 'dark'
     )
 
     $sourceDir = Join-Path $global:AppBuilderPath "$Name\source"
@@ -1401,7 +1529,7 @@ function Update-AppBuild {
             }
             catch { }
         }
-        return New-AppBuild -Prompt $originalPrompt -Framework $framework -Name $Name -Provider $Provider -Model $Model
+        return New-AppBuild -Prompt $originalPrompt -Framework $framework -Name $Name -Provider $Provider -Model $Model -Theme $Theme
     }
 
     # Diff-based modification
@@ -1430,7 +1558,7 @@ function Update-AppBuild {
 
         if ($content -match 'FULL_REGENERATION_NEEDED') {
             Write-Host "[AppBuilder] LLM recommends full regeneration. Switching..." -ForegroundColor Yellow
-            return Update-AppBuild -Name $Name -Changes "rewrite: $Changes" -Provider $Provider -Model $Model
+            return Update-AppBuild -Name $Name -Changes "rewrite: $Changes" -Provider $Provider -Model $Model -Theme $Theme
         }
 
         # Apply FIND/REPLACE edits
@@ -1544,6 +1672,15 @@ Register-ArgumentCompleter -CommandName New-AppBuild -ParameterName Framework -S
         [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', "Framework: $_")
     }
 }
+
+$_themeCompleter = {
+    param($commandName, $parameterName, $wordToComplete, $commandAst, $fakeBoundParameters)
+    @('dark', 'light', 'system') | Where-Object { $_ -like "$wordToComplete*" } | ForEach-Object {
+        [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', "Theme: $_")
+    }
+}
+Register-ArgumentCompleter -CommandName New-AppBuild   -ParameterName Theme -ScriptBlock $_themeCompleter
+Register-ArgumentCompleter -CommandName Update-AppBuild -ParameterName Theme -ScriptBlock $_themeCompleter
 
 # ===== Aliases =====
 Set-Alias builds Get-AppBuilds -Force

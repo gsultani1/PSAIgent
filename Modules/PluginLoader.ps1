@@ -196,7 +196,6 @@ function Import-BildsyPSPlugins {
         $pluginWorkflowNames = @()
         $pluginCategoryNames = @()
         $pluginFunctionNames = @()
-        $pluginTestNames = @()
 
         # ── Validate scriptblock types ──
         $badIntents = @($PluginIntents.Keys | Where-Object { $PluginIntents[$_] -isnot [scriptblock] })
