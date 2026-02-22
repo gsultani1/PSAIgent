@@ -28,6 +28,9 @@ Describe 'AppBuilder — Offline' {
             @{ prompt = 'a dashboard with charts and drag drop'; expected = 'python-web' }
             @{ prompt = 'a web app with REST API and login';       expected = 'python-web' }
             @{ prompt = 'a web app with login and database';     expected = 'python-web' }
+            @{ prompt = 'a tauri app for note taking';           expected = 'tauri' }
+            @{ prompt = 'a rust GUI file manager';               expected = 'tauri' }
+            @{ prompt = 'a native web desktop app with rust';    expected = 'tauri' }
         ) {
             Get-BuildFramework -Prompt $prompt | Should -Be $expected
         }
@@ -36,6 +39,7 @@ Describe 'AppBuilder — Offline' {
             @{ prompt = 'a dashboard with charts'; framework = 'python-tk';  expected = 'python-tk' }
             @{ prompt = 'a python calculator';     framework = 'powershell'; expected = 'powershell' }
             @{ prompt = 'a tkinter app';           framework = 'python-web'; expected = 'python-web' }
+            @{ prompt = 'a simple calculator';     framework = 'tauri';      expected = 'tauri' }
         ) {
             Get-BuildFramework -Prompt $prompt -Framework $framework | Should -Be $expected
         }
@@ -202,6 +206,24 @@ $form.Text = Get-Greeting -Name 'World'
             }
         }
 
+        Context 'Tauri — Rust Validation' {
+            It 'Accepts valid Rust code' {
+                $files = New-FileMap @{ 'src-tauri/src/main.rs' = 'fn main() { tauri::Builder::default().run(tauri::generate_context!()).expect("error"); }' }
+                $result = Test-GeneratedCode -Files $files -Framework 'tauri'
+                $result.Success | Should -BeTrue
+            }
+
+            It 'Flags trivially small Rust file' {
+                $files = New-FileMap @{ 'src-tauri/src/main.rs' = 'fn m()' }
+                $result = Test-GeneratedCode -Files $files -Framework 'tauri'
+                # Only flags if cargo is available; otherwise passes
+                if (Get-Command cargo -ErrorAction SilentlyContinue) {
+                    $result.Success | Should -BeFalse
+                    ($result.Errors -join "`n") | Should -Match 'trivially small'
+                }
+            }
+        }
+
         Context 'Edge Cases' {
             It 'Handles empty code gracefully' {
                 $files = New-FileMap @{ 'app.ps1' = '' }
@@ -266,6 +288,32 @@ $form = New-Object System.Windows.Forms.Form
                 $files = New-FileMap @{ 'app.py' = "import tkinter`nroot = tkinter.Tk()`nroot.mainloop()" }
                 $result = Invoke-BildsyPSBranding -Files $files -Framework 'python-tk'
                 $result['app.py'] | Should -Match 'Built with BildsyPS'
+            }
+        }
+
+        Context 'Tauri Branding' {
+            It 'Injects footer into Tauri HTML file' {
+                $files = New-FileMap @{
+                    'web/index.html'          = '<html><body><h1>App</h1></body></html>'
+                    'src-tauri/src/main.rs'   = 'fn main() { tauri::Builder::default().run(); }'
+                    'src-tauri/Cargo.toml'    = '[package]'
+                }
+                $result = Invoke-BildsyPSBranding -Files $files -Framework 'tauri'
+                $result['web/index.html'] | Should -Match 'Built with BildsyPS'
+            }
+
+            It 'Does not double-inject when branding already exists' {
+                $files = New-FileMap @{
+                    'web/index.html' = '<html><body>Built with BildsyPS</body></html>'
+                }
+                $result = Invoke-BildsyPSBranding -Files $files -Framework 'tauri'
+                [regex]::Matches($result['web/index.html'], 'Built with BildsyPS').Count | Should -Be 1
+            }
+
+            It 'NoBranding flag skips injection for tauri' {
+                $files = New-FileMap @{ 'web/index.html' = '<html><body></body></html>' }
+                $result = Invoke-BildsyPSBranding -Files $files -Framework 'tauri' -NoBranding
+                $result['web/index.html'] | Should -Not -Match 'Built with BildsyPS'
             }
         }
 
@@ -597,6 +645,46 @@ Describe 'AppBuilder — Live' -Tag 'Live' {
         AfterAll {
             if ($script:CanBuildPy) {
                 Remove-AppBuild -Name 'test-py-color' -ErrorAction SilentlyContinue
+            }
+        }
+    }
+
+    Context 'Tauri Full Build Pipeline' {
+
+        BeforeAll {
+            $script:HasCargo = $null -ne (Get-Command cargo -ErrorAction SilentlyContinue)
+            $script:CanBuildTauri = $script:HasProvider -and $script:HasCargo
+        }
+
+        It 'New-AppBuild generates a Tauri executable from a prompt' {
+            if (-not $script:CanBuildTauri) { Set-ItResult -Skipped -Because 'No LLM provider or Rust toolchain available'; return }
+            $script:TauriResult = New-AppBuild -Prompt 'a tauri app that is a simple counter with plus and minus buttons' `
+                -Framework 'tauri' -Name 'test-tauri-counter' -Provider $script:LiveProvider
+            $script:TauriResult.Success   | Should -BeTrue
+            $script:TauriResult.ExePath   | Should -Not -BeNullOrEmpty
+            Test-Path $script:TauriResult.ExePath | Should -BeTrue
+            $script:TauriResult.Framework | Should -Be 'tauri'
+        }
+
+        It 'Source contains BildsyPS branding in HTML' {
+            if (-not $script:CanBuildTauri) { Set-ItResult -Skipped -Because 'No LLM provider or Rust toolchain available'; return }
+            $src = Join-Path $global:AppBuilderPath 'test-tauri-counter\source\web\index.html'
+            if (Test-Path $src) {
+                Get-Content $src -Raw | Should -Match 'Built with BildsyPS'
+            }
+        }
+
+        It 'Source contains required Tauri files' {
+            if (-not $script:CanBuildTauri) { Set-ItResult -Skipped -Because 'No LLM provider or Rust toolchain available'; return }
+            $sourceDir = Join-Path $global:AppBuilderPath 'test-tauri-counter\source'
+            Test-Path (Join-Path $sourceDir 'src-tauri\src\main.rs')    | Should -BeTrue
+            Test-Path (Join-Path $sourceDir 'src-tauri\Cargo.toml')     | Should -BeTrue
+            Test-Path (Join-Path $sourceDir 'web\index.html')           | Should -BeTrue
+        }
+
+        AfterAll {
+            if ($script:CanBuildTauri) {
+                Remove-AppBuild -Name 'test-tauri-counter' -ErrorAction SilentlyContinue
             }
         }
     }

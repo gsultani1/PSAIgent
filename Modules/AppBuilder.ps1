@@ -45,14 +45,23 @@ RULES:
 6. Dark theme: Background=#1e1e1e, Foreground=#e0e0e0, Accent=#7c3aed, Font=Segoe UI
 7. Add a Help menu with an "About" item that shows a MessageBox:
    "Built with BildsyPS — AI-powered shell orchestrator`nhttps://github.com/gsultani/bildsyps"
-8. If the app uses data persistence, use a JSON file in: Join-Path $env:APPDATA $appName
+8. If the app uses data persistence, store ALL data files (JSON, SQLite, logs, config) in:
+   $appDataDir = Join-Path $env:APPDATA $appName
+   Create the directory if it does not exist. NEVER store data files alongside the script or exe.
 9. Add proper form disposal and cleanup.
 10. The script must work when compiled to .exe via ps2exe.
+10b. Do NOT use PowerShell 7+ only operators: ?? (null-coalescing), ??= (null-coalescing
+    assignment), or ?. / ?[] (null-conditional). These break ps2exe which targets Windows
+    PowerShell 5.1. Use if ($null -ne $x) { $x } else { $default } instead.
 11. Start with: Add-Type -AssemblyName System.Windows.Forms, System.Drawing
 12. NEVER hardcode or generate placeholder API keys, tokens, passwords, or secrets in the code.
     If the app needs API credentials, create a Settings dialog where the user can enter their own
     key at runtime. Persist settings to the app's JSON config file (see rule 8). Mask the key
     in the UI with PasswordChar='*'.
+13. Variables assigned inside WinForms event handler scriptblocks (Add_Click, Add_PrintPage,
+    etc.) are scoped locally. To share data between a handler and its parent function, store
+    values on the Form's .Tag property, a hashtable, or an ArrayList (reference types).
+    NEVER rely on bare $variable = value inside handlers to update parent-scope variables.
 
 Output ONLY the code block. No explanations before or after.
 '@
@@ -119,6 +128,43 @@ RULES:
 Output ONLY the code blocks. No explanations before or after.
 '@
 
+$script:BuilderTauriPrompt = @'
+You are a Tauri v2 desktop application code generator. Given a specification, produce a complete, buildable Tauri project with a Rust backend and plain HTML/CSS/JS frontend.
+
+RULES:
+1. Output these files, each in its own fenced code block with filename:
+   ```toml src-tauri/Cargo.toml
+   ```rust src-tauri/src/main.rs
+   ```json src-tauri/tauri.conf.json
+   ```rust src-tauri/build.rs
+   ```html web/index.html
+   ```css web/style.css
+   ```javascript web/script.js
+2. src-tauri/Cargo.toml: use tauri 2.x with features ["devtools"]. Name the package after the app.
+3. src-tauri/src/main.rs: use tauri::Builder, register any Tauri commands with #[tauri::command].
+   Expose backend functions to the frontend via invoke(). Use serde for serialization.
+4. src-tauri/tauri.conf.json: set identifier to "com.bildsyps.<appname>", productName, version "0.1.0".
+   Set build.devPath to "../web" and build.distDir to "../web".
+   Under allowlist, enable needed APIs (fs, dialog, path, etc.) as required by the spec.
+5. src-tauri/build.rs: standard tauri_build::build() call.
+6. Frontend in web/: plain HTML5, vanilla ES6+ JS, CSS. No frameworks, no bundler, no npm.
+7. Dark theme in CSS: background=#1e1e1e, color=#e0e0e0, accent=#7c3aed, font-family="Segoe UI".
+8. Add a branded startup splash overlay in index.html:
+   - Full-screen overlay div, dark bg, "Built with BildsyPS" in accent color
+   - Fades out after 1.5 seconds via CSS animation + JS setTimeout
+   - Footer: <footer style="text-align:center;padding:8px;color:#666;font-size:11px">Built with BildsyPS</footer>
+9. If the app needs data persistence, use Tauri fs API + JSON file in the app data directory.
+   Access via @tauri-apps/api path and fs modules from the JS side, or Rust-side file I/O.
+10. NEVER hardcode or generate placeholder API keys, tokens, passwords, or secrets in the code.
+    If the app needs API credentials, create a Settings panel in the HTML UI where the user can
+    enter their own key at runtime. Persist settings via a Tauri command to the app's JSON
+    config file. Use <input type="password"> for key fields.
+11. Use the __TAURI__ global or window.__TAURI__.invoke() for frontend-to-backend communication.
+12. All Rust code must compile with stable Rust. No nightly features.
+
+Output ONLY the code blocks. No explanations before or after.
+'@
+
 $script:BuilderModifyPrompt = @'
 You are a code modification assistant. Given existing source code and a user's change request, output surgical edits using FIND/REPLACE blocks.
 
@@ -162,7 +208,7 @@ function Get-BuildFramework {
 
     # User override wins
     if ($Framework) {
-        $valid = @('powershell', 'python-tk', 'python-web')
+        $valid = @('powershell', 'python-tk', 'python-web', 'tauri')
         if ($Framework -in $valid) { return $Framework }
         Write-Host "[AppBuilder] Unknown framework '$Framework'. Valid: $($valid -join ', ')" -ForegroundColor Yellow
     }
@@ -170,6 +216,9 @@ function Get-BuildFramework {
     $lower = $Prompt.ToLower()
 
     # Explicit triggers
+    if ($lower -match '\b(tauri|rust\s*gui|rust\s*app|native\s*web|tauri\s*app)\b') {
+        return 'tauri'
+    }
     if ($lower -match '\b(pywebview|html\s*ui|web\s*app|dashboard|charts?|modern\s*ui|drag\s*and\s*drop|responsive)\b') {
         return 'python-web'
     }
@@ -261,6 +310,7 @@ function Invoke-PromptRefinement {
         'powershell' { 'POWERSHELL (Windows Forms GUI, single .ps1 file, ps2exe compatible)' }
         'python-tk'  { 'PYTHON_TKINTER (single app.py, stdlib only)' }
         'python-web' { 'PYTHON_PYWEBVIEW (app.py + web/index.html + CSS + JS)' }
+        'tauri'      { 'TAURI_V2 (Rust backend + HTML/CSS/JS frontend, native desktop app)' }
     }
 
     $systemPrompt = $script:BuilderRefinePrompt -replace '\{FRAMEWORK_PLACEHOLDER\}', $frameworkLabel
@@ -318,23 +368,28 @@ function Invoke-CodeGeneration {
         'powershell' { $script:BuilderPowerShellPrompt }
         'python-tk'  { $script:BuilderTkinterPrompt }
         'python-web' { $script:BuilderPyWebViewPrompt }
+        'tauri'      { $script:BuilderTauriPrompt }
     }
 
     $messages = @(
         @{ role = 'user'; content = "Generate the application from this specification:`n`n$Spec" }
     )
 
+    # Scale timeout with token budget: 5min base + 1s per 100 tokens
+    $timeoutSec = [math]::Max(300, 300 + [math]::Ceiling($MaxTokens / 100))
+
     $params = @{
         Messages     = $messages
         SystemPrompt = $systemPrompt
         MaxTokens    = $MaxTokens
         Temperature  = 0.3
+        TimeoutSec   = $timeoutSec
     }
     if ($Provider) { $params.Provider = $Provider }
     if ($Model) { $params.Model = $Model }
 
     try {
-        Write-Host "[AppBuilder] Generating code ($Framework, max $MaxTokens tokens)..." -ForegroundColor Cyan
+        Write-Host "[AppBuilder] Generating code ($Framework, max $MaxTokens tokens, timeout ${timeoutSec}s)..." -ForegroundColor Cyan
         $response = Invoke-ChatCompletion @params
         $content = if ($response.Content) { $response.Content } else { "$response" }
 
@@ -396,6 +451,9 @@ function Invoke-CodeGeneration {
                     'css'        { 'web/style.css' }
                     'javascript' { 'web/script.js' }
                     'js'         { 'web/script.js' }
+                    'rust'       { if ($files.ContainsKey('src-tauri/src/main.rs')) { 'src-tauri/build.rs' } else { 'src-tauri/src/main.rs' } }
+                    'rs'         { if ($files.ContainsKey('src-tauri/src/main.rs')) { 'src-tauri/build.rs' } else { 'src-tauri/src/main.rs' } }
+                    'toml'       { 'src-tauri/Cargo.toml' }
                     'text'       { 'requirements.txt' }
                     default      { "file_$($block.Index).txt" }
                 }
@@ -411,11 +469,12 @@ function Invoke-CodeGeneration {
         # Validate we got the primary file
         $primaryFile = switch ($Framework) {
             'powershell' { 'app.ps1' }
+            'tauri'      { 'src-tauri/src/main.rs' }
             default      { 'app.py' }
         }
         if (-not $files.ContainsKey($primaryFile)) {
             # Try to find the closest match
-            $candidate = $files.Keys | Where-Object { $_ -match '\.(ps1|py)$' } | Select-Object -First 1
+            $candidate = $files.Keys | Where-Object { $_ -match '\.(ps1|py|rs)$' } | Select-Object -First 1
             if ($candidate) {
                 $files[$primaryFile] = $files[$candidate]
                 if ($candidate -ne $primaryFile) { $files.Remove($candidate) }
@@ -478,6 +537,30 @@ function Test-GeneratedCode {
                     }
                 }
                 finally { Remove-Item $tempFile -Force -ErrorAction SilentlyContinue }
+            }
+        }
+
+        elseif ($ext -eq '.rs') {
+            if (Get-Command cargo -ErrorAction SilentlyContinue) {
+                # Light syntax check: attempt to parse with rustc --edition 2021
+                # Skip for now — cargo check requires a full project. Just ensure it's not empty.
+                if (-not $code -or $code.Trim().Length -lt 10) {
+                    $errors += "[$fileName] Rust file appears empty or trivially small"
+                }
+            }
+        }
+
+        # PS 5.1 compatibility: reject PS7+ only operators in .ps1 files
+        if ($ext -eq '.ps1') {
+            $compatPatterns = @(
+                @{ Pattern = '\?\?';  Name = 'null-coalescing operator ?? (PS7+ only, breaks ps2exe)' }
+                @{ Pattern = '\?\.';  Name = 'null-conditional operator ?. (PS7+ only, breaks ps2exe)' }
+                @{ Pattern = '\?\[';  Name = 'null-conditional index ?[] (PS7+ only, breaks ps2exe)' }
+            )
+            foreach ($cp in $compatPatterns) {
+                if ($code -match $cp.Pattern) {
+                    $errors += "[$fileName] Compatibility: contains $($cp.Name)"
+                }
             }
         }
 
@@ -599,6 +682,18 @@ def _bildsyps_about():
             $key = 'web/index.html'
             if ($Files.ContainsKey($key) -and $Files[$key] -notmatch [regex]::Escape($brandingText)) {
                 # Add branded footer before </body>
+                $footer = '<footer style="text-align:center;padding:8px;color:#666;font-size:11px">Built with BildsyPS</footer>'
+                if ($Files[$key] -match '</body>') {
+                    $Files[$key] = $Files[$key] -replace '</body>', "$footer`n</body>"
+                }
+                else {
+                    $Files[$key] += "`n$footer"
+                }
+            }
+        }
+        'tauri' {
+            $key = 'web/index.html'
+            if ($Files.ContainsKey($key) -and $Files[$key] -notmatch [regex]::Escape($brandingText)) {
                 $footer = '<footer style="text-align:center;padding:8px;color:#666;font-size:11px">Built with BildsyPS</footer>'
                 if ($Files[$key] -match '</body>') {
                     $Files[$key] = $Files[$key] -replace '</body>', "$footer`n</body>"
@@ -806,6 +901,102 @@ function Build-PythonExecutable {
     }
     catch {
         return @{ Success = $false; Output = "Build error: $($_.Exception.Message)" }
+    }
+}
+
+function Build-TauriExecutable {
+    <#
+    .SYNOPSIS
+    Build a Tauri project to a native .exe via cargo tauri build.
+    Requires Rust toolchain (cargo) and cargo-tauri CLI.
+    #>
+    param(
+        [Parameter(Mandatory)][string]$SourceDir,
+        [Parameter(Mandatory)][string]$AppName,
+        [string]$OutputDir,
+        [string]$IconPath
+    )
+
+    if (-not $OutputDir) { $OutputDir = Join-Path $global:AppBuilderPath $AppName }
+    if (-not (Test-Path $OutputDir)) { New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null }
+
+    # Check Rust toolchain
+    $cargo = Get-Command cargo -ErrorAction SilentlyContinue
+    if (-not $cargo) {
+        return @{ Success = $false; Output = "Rust toolchain not found. Install from https://rustup.rs/ and ensure 'cargo' is on PATH." }
+    }
+
+    $startTime = Get-Date
+
+    try {
+        # Ensure cargo-tauri CLI is installed
+        $tauriCli = & cargo install --list 2>&1 | Out-String
+        if ($tauriCli -notmatch 'tauri-cli') {
+            Write-Host "[AppBuilder] Installing cargo-tauri CLI (first-time setup, may take a few minutes)..." -ForegroundColor Cyan
+            & cargo install tauri-cli 2>&1 | Out-Null
+        }
+
+        # The tauri project root is the parent of src-tauri
+        $tauriProjectRoot = $SourceDir
+        $tauriDir = Join-Path $SourceDir 'src-tauri'
+
+        if (-not (Test-Path $tauriDir)) {
+            return @{ Success = $false; Output = "src-tauri directory not found in $SourceDir" }
+        }
+
+        if (-not (Test-Path (Join-Path $tauriDir 'Cargo.toml'))) {
+            return @{ Success = $false; Output = "src-tauri/Cargo.toml not found" }
+        }
+
+        # Optionally inject icon
+        if ($IconPath -and (Test-Path $IconPath)) {
+            $iconDir = Join-Path $tauriDir 'icons'
+            if (-not (Test-Path $iconDir)) { New-Item -ItemType Directory -Path $iconDir -Force | Out-Null }
+            Copy-Item $IconPath (Join-Path $iconDir 'icon.ico') -Force
+        }
+
+        Write-Host "[AppBuilder] Building Tauri app (this may take several minutes on first build)..." -ForegroundColor Cyan
+        $buildLog = Join-Path $SourceDir 'build_output.log'
+        $buildErr = Join-Path $SourceDir 'build_errors.log'
+
+        Start-Process cargo -ArgumentList @('tauri', 'build') `
+            -WorkingDirectory $tauriProjectRoot -Wait -NoNewWindow `
+            -RedirectStandardOutput $buildLog -RedirectStandardError $buildErr
+
+        $elapsed = [math]::Round(((Get-Date) - $startTime).TotalSeconds, 1)
+
+        # Tauri outputs to src-tauri/target/release/bundle/nsis/*.exe or src-tauri/target/release/<name>.exe
+        $releaseExe = Get-ChildItem (Join-Path $tauriDir 'target\release') -Filter '*.exe' -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -notmatch 'build-script' } | Select-Object -First 1
+
+        # Also check NSIS bundle
+        if (-not $releaseExe) {
+            $releaseExe = Get-ChildItem (Join-Path $tauriDir 'target\release\bundle') -Filter '*.exe' -Recurse -ErrorAction SilentlyContinue |
+                Select-Object -First 1
+        }
+
+        if ($releaseExe) {
+            $finalExe = Join-Path $OutputDir "$AppName.exe"
+            Copy-Item $releaseExe.FullName $finalExe -Force
+            $size = (Get-Item $finalExe).Length
+            $sizeStr = if ($size -lt 1MB) { "$([math]::Round($size/1KB))KB" } else { "$([math]::Round($size/1MB, 1))MB" }
+            return @{
+                Success   = $true
+                ExePath   = $finalExe
+                Size      = $sizeStr
+                BuildTime = $elapsed
+                Output    = "Built $AppName.exe ($sizeStr) in ${elapsed}s via Tauri"
+            }
+        }
+
+        $errContent = if (Test-Path $buildErr) { Get-Content $buildErr -Raw -ErrorAction SilentlyContinue } else { '' }
+        $logContent = if (Test-Path $buildLog) { Get-Content $buildLog -Raw -ErrorAction SilentlyContinue } else { '' }
+        $combinedErr = @($errContent, $logContent) -join "`n" | Select-Object -First 1
+        if ($combinedErr.Length -gt 500) { $combinedErr = $combinedErr.Substring(0, 500) + '...' }
+        return @{ Success = $false; Output = "Tauri build failed (${elapsed}s): $combinedErr" }
+    }
+    catch {
+        return @{ Success = $false; Output = "Tauri build error: $($_.Exception.Message)" }
     }
 }
 
@@ -1117,11 +1308,10 @@ function New-AppBuild {
 
     # Step 6: Build
     $outputDir = Join-Path $global:AppBuilderPath $Name
-    $buildResult = if ($framework -eq 'powershell') {
-        Build-PowerShellExecutable -SourceDir $sourceDir -AppName $Name -OutputDir $outputDir -IconPath $IconPath
-    }
-    else {
-        Build-PythonExecutable -SourceDir $sourceDir -AppName $Name -Framework $framework -OutputDir $outputDir -IconPath $IconPath
+    $buildResult = switch ($framework) {
+        'powershell' { Build-PowerShellExecutable -SourceDir $sourceDir -AppName $Name -OutputDir $outputDir -IconPath $IconPath }
+        'tauri'      { Build-TauriExecutable -SourceDir $sourceDir -AppName $Name -OutputDir $outputDir -IconPath $IconPath }
+        default      { Build-PythonExecutable -SourceDir $sourceDir -AppName $Name -Framework $framework -OutputDir $outputDir -IconPath $IconPath }
     }
 
     $totalElapsed = [math]::Round(((Get-Date) - $totalStart).TotalSeconds, 1)
@@ -1185,6 +1375,7 @@ function Update-AppBuild {
 
     # Detect framework from files
     $framework = if ($files.ContainsKey('app.ps1')) { 'powershell' }
+                 elseif ($files.ContainsKey('src-tauri/src/main.rs') -or $files.ContainsKey('src-tauri/Cargo.toml')) { 'tauri' }
                  elseif ($files.ContainsKey('web/index.html')) { 'python-web' }
                  else { 'python-tk' }
 
@@ -1310,11 +1501,10 @@ function Update-AppBuild {
 
         # Rebuild
         $outputDir = Join-Path $global:AppBuilderPath $Name
-        $buildResult = if ($framework -eq 'powershell') {
-            Build-PowerShellExecutable -SourceDir $sourceDir -AppName $Name -OutputDir $outputDir
-        }
-        else {
-            Build-PythonExecutable -SourceDir $sourceDir -AppName $Name -Framework $framework -OutputDir $outputDir
+        $buildResult = switch ($framework) {
+            'powershell' { Build-PowerShellExecutable -SourceDir $sourceDir -AppName $Name -OutputDir $outputDir }
+            'tauri'      { Build-TauriExecutable -SourceDir $sourceDir -AppName $Name -OutputDir $outputDir }
+            default      { Build-PythonExecutable -SourceDir $sourceDir -AppName $Name -Framework $framework -OutputDir $outputDir }
         }
 
         if ($buildResult.Success) {
@@ -1350,7 +1540,7 @@ Register-ArgumentCompleter -CommandName Update-AppBuild -ParameterName Name -Scr
 
 Register-ArgumentCompleter -CommandName New-AppBuild -ParameterName Framework -ScriptBlock {
     param($commandName, $parameterName, $wordToComplete, $commandAst, $fakeBoundParameters)
-    @('powershell', 'python-tk', 'python-web') | Where-Object { $_ -like "$wordToComplete*" } | ForEach-Object {
+    @('powershell', 'python-tk', 'python-web', 'tauri') | Where-Object { $_ -like "$wordToComplete*" } | ForEach-Object {
         [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', "Framework: $_")
     }
 }

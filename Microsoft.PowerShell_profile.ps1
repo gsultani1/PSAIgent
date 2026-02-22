@@ -12,6 +12,12 @@ trap {
     continue
 }
 
+# Ensure Rust/Cargo is on PATH if installed
+$cargobin = Join-Path $env:USERPROFILE '.cargo\bin'
+if ((Test-Path $cargobin) -and $env:PATH -notmatch [regex]::Escape($cargobin)) {
+    $env:PATH = "$cargobin;$env:PATH"
+}
+
 # Keep UTF-8 and predictable output
 [Console]::OutputEncoding = [Text.UTF8Encoding]::UTF8
 $ErrorActionPreference = "Stop"

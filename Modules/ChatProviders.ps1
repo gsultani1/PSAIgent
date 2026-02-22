@@ -277,7 +277,8 @@ function Invoke-OpenAICompatibleChat {
         [double]$Temperature = 0.7,
         [int]$MaxTokens = 4096,
         [string]$ApiKey = $null,
-        [switch]$Stream
+        [switch]$Stream,
+        [int]$TimeoutSec = 300
     )
     
     $body = @{
@@ -304,6 +305,8 @@ function Invoke-OpenAICompatibleChat {
         $request = [System.Net.HttpWebRequest]::Create($Endpoint)
         $request.Method = "POST"
         $request.ContentType = "application/json"
+        $request.Timeout = $TimeoutSec * 1000
+        $request.ReadWriteTimeout = $TimeoutSec * 1000
         if ($ApiKey) {
             $request.Headers.Add("Authorization", "Bearer $ApiKey")
         }
@@ -364,24 +367,52 @@ function Invoke-OpenAICompatibleChat {
         }
     }
     else {
-        # Non-streaming response
-        $response = Invoke-RestMethod -Uri $Endpoint -Method Post -Body $jsonBody -Headers $headers -ErrorAction Stop
-        
-        if ($null -eq $response.choices -or $response.choices.Count -eq 0) {
-            throw "Server returned empty or malformed response"
-        }
-        
-        $reply = $response.choices[0].message.content
-        if ([string]::IsNullOrWhiteSpace($reply)) {
-            throw "Server returned empty message content"
-        }
-        
-        return @{
-            Content    = $reply
-            Model      = $response.model
-            Usage      = $response.usage
-            StopReason = $response.choices[0].finish_reason
-            Streamed   = $false
+        # Non-streaming response with retry
+        $maxRetries = 3
+        $attempt = 0
+        $lastError = $null
+
+        while ($attempt -lt $maxRetries) {
+            $attempt++
+            try {
+                $response = Invoke-RestMethod -Uri $Endpoint -Method Post -Body ([System.Text.Encoding]::UTF8.GetBytes($jsonBody)) -Headers $headers -ContentType 'application/json; charset=utf-8' -TimeoutSec $TimeoutSec -ErrorAction Stop
+
+                if ($null -eq $response.choices -or $response.choices.Count -eq 0) {
+                    throw "Server returned empty or malformed response"
+                }
+
+                $reply = $response.choices[0].message.content
+                if ([string]::IsNullOrWhiteSpace($reply)) {
+                    throw "Server returned empty message content"
+                }
+
+                return @{
+                    Content    = $reply
+                    Model      = $response.model
+                    Usage      = $response.usage
+                    StopReason = $response.choices[0].finish_reason
+                    Streamed   = $false
+                }
+            }
+            catch {
+                $lastError = $_
+                $ex = $_.Exception
+                $detail = $ex.Message
+                while ($ex.InnerException) {
+                    $ex = $ex.InnerException
+                    $detail += " -> [$($ex.GetType().Name)] $($ex.Message)"
+                }
+
+                if ($attempt -lt $maxRetries) {
+                    $wait = $attempt * 5
+                    Write-Host "[OpenAI] Attempt $attempt/$maxRetries failed: $detail" -ForegroundColor Yellow
+                    Write-Host "[OpenAI] Retrying in ${wait}s..." -ForegroundColor Yellow
+                    Start-Sleep -Seconds $wait
+                }
+                else {
+                    throw $lastError
+                }
+            }
         }
     }
 }
@@ -394,7 +425,8 @@ function Invoke-AnthropicChat {
         [double]$Temperature = 0.7,
         [int]$MaxTokens = 4096,
         [string]$ApiKey,
-        [string]$SystemPrompt = $null
+        [string]$SystemPrompt = $null,
+        [int]$TimeoutSec = 300
     )
     
     # Anthropic uses a different message format
@@ -437,26 +469,55 @@ function Invoke-AnthropicChat {
         "anthropic-version" = "2023-06-01"
     }
     
-    $apiResponse = Invoke-RestMethod -Uri $Endpoint -Method Post -Body $jsonBody -Headers $headers -ErrorAction Stop
-    
-    if ($null -eq $apiResponse.content -or $apiResponse.content.Count -eq 0) {
-        throw "Anthropic returned empty response"
-    }
-    
-    $reply = ($apiResponse.content | Where-Object { $_.type -eq 'text' } | Select-Object -First 1).text
-    if ([string]::IsNullOrWhiteSpace($reply)) {
-        throw "Anthropic returned empty message content"
-    }
-    
-    return @{
-        Content    = $reply
-        Model      = $apiResponse.model
-        Usage      = @{
-            prompt_tokens     = $apiResponse.usage.input_tokens
-            completion_tokens = $apiResponse.usage.output_tokens
-            total_tokens      = $apiResponse.usage.input_tokens + $apiResponse.usage.output_tokens
+    $maxRetries = 3
+    $attempt = 0
+    $lastError = $null
+
+    while ($attempt -lt $maxRetries) {
+        $attempt++
+        try {
+            $apiResponse = Invoke-RestMethod -Uri $Endpoint -Method Post -Body ([System.Text.Encoding]::UTF8.GetBytes($jsonBody)) -Headers $headers -ContentType 'application/json; charset=utf-8' -TimeoutSec $TimeoutSec -ErrorAction Stop
+
+            if ($null -eq $apiResponse.content -or $apiResponse.content.Count -eq 0) {
+                throw "Anthropic returned empty response"
+            }
+
+            $reply = ($apiResponse.content | Where-Object { $_.type -eq 'text' } | Select-Object -First 1).text
+            if ([string]::IsNullOrWhiteSpace($reply)) {
+                throw "Anthropic returned empty message content"
+            }
+
+            return @{
+                Content    = $reply
+                Model      = $apiResponse.model
+                Usage      = @{
+                    prompt_tokens     = $apiResponse.usage.input_tokens
+                    completion_tokens = $apiResponse.usage.output_tokens
+                    total_tokens      = $apiResponse.usage.input_tokens + $apiResponse.usage.output_tokens
+                }
+                StopReason = $apiResponse.stop_reason
+            }
         }
-        StopReason = $apiResponse.stop_reason
+        catch {
+            $lastError = $_
+            $ex = $_.Exception
+            $detail = $ex.Message
+            while ($ex.InnerException) {
+                $ex = $ex.InnerException
+                $detail += " -> [$($ex.GetType().Name)] $($ex.Message)"
+            }
+
+            if ($attempt -lt $maxRetries) {
+                $wait = $attempt * 5
+                Write-Host "[Anthropic] Attempt $attempt/$maxRetries failed: $detail" -ForegroundColor Yellow
+                Write-Host "[Anthropic] Retrying in ${wait}s..." -ForegroundColor Yellow
+                Start-Sleep -Seconds $wait
+            }
+            else {
+                Write-Host "[Anthropic] All $maxRetries attempts failed: $detail" -ForegroundColor Red
+                throw $lastError
+            }
+        }
     }
 }
 
@@ -534,7 +595,8 @@ function Invoke-ChatCompletion {
         [double]$Temperature = 0.7,
         [int]$MaxTokens = 4096,
         [string]$SystemPrompt = $null,
-        [switch]$Stream
+        [switch]$Stream,
+        [int]$TimeoutSec = 300
     )
     
     $config = $global:ChatProviders[$Provider]
@@ -559,11 +621,11 @@ function Invoke-ChatCompletion {
     # Route to appropriate API handler
     switch ($config.Format) {
         'openai' {
-            return Invoke-OpenAICompatibleChat -Endpoint $config.Endpoint -Model $Model -Messages $Messages -Temperature $Temperature -MaxTokens $MaxTokens -ApiKey $apiKey -Stream:$Stream
+            return Invoke-OpenAICompatibleChat -Endpoint $config.Endpoint -Model $Model -Messages $Messages -Temperature $Temperature -MaxTokens $MaxTokens -ApiKey $apiKey -Stream:$Stream -TimeoutSec $TimeoutSec
         }
         'anthropic' {
             # Anthropic streaming not yet implemented, fall back to non-streaming
-            return Invoke-AnthropicChat -Endpoint $config.Endpoint -Model $Model -Messages $Messages -Temperature $Temperature -MaxTokens $MaxTokens -ApiKey $apiKey -SystemPrompt $SystemPrompt
+            return Invoke-AnthropicChat -Endpoint $config.Endpoint -Model $Model -Messages $Messages -Temperature $Temperature -MaxTokens $MaxTokens -ApiKey $apiKey -SystemPrompt $SystemPrompt -TimeoutSec $TimeoutSec
         }
         'llm-cli' {
             return Invoke-LLMCliChat -Model $Model -Messages $Messages -SystemPrompt $SystemPrompt
