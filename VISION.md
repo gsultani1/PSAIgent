@@ -21,14 +21,15 @@ Today it does things like:
 - **`agent -Interactive "research async patterns"`** → multi-turn agent session with shared working memory across follow-up tasks
 - **`Invoke-Workflow -Name daily_standup -StopOnError`** → halt a workflow on first failure rather than running all steps regardless
 - **`vision screenshot`** → captures your screen and sends it to a vision-capable model for analysis
-- **`build "a todo list app with categories"`** → generates code, validates it, compiles a standalone .exe, and tracks the build in SQLite
+- **`build "a todo list app with categories"`** → planning agent decomposes the spec, generates code, fix loop retries on validation failure, review agent checks against spec, compiles a standalone .exe, and tracks the build in SQLite
+- **`build powershell-module "a log parser module"`** → generates a `.psm1` + `.psd1` module with approved verb-noun functions, validates naming and manifest completeness, packages as a zip
 - **`rebuild my-app "add dark mode"`** → applies diff-based edits to an existing build and recompiles
 - **`search meeting notes`** → FTS5 full-text search across all saved conversation sessions
 - **Tab ↹ on any parameter** → `Resume-Chat -Name <tab>` lists saved sessions; `Invoke-Workflow -Name <tab>` lists workflows; `gco -Branch <tab>` lists git branches; `Remove-AppBuild -Name <tab>` lists builds — every public function now has dynamic completers
 
 All of it runs locally. Nothing phones home. The AI can only run commands you've explicitly whitelisted.
 
-As of v1.3.1, the codebase has been fully audited: security hardened, parse errors eliminated, duplicate code removed, and intent ordering made deterministic. A comprehensive E2E test suite now covers 313 tests across 16 modules with 0 failures — the foundation is clean and verified. Every public function has dynamic tab completion; the `gm` alias conflict with `Get-Member` has been resolved (`gmerge`).
+As of v1.5.0, the App Builder pipeline has been fully redesigned with five build lanes and a self-improving generation loop. A comprehensive E2E test suite covers 133 tests with 0 failures. Every public function has dynamic tab completion; the `gm` alias conflict with `Get-Member` has been resolved (`gmerge`).
 
 ---
 
@@ -56,10 +57,13 @@ Vision model support for screenshots and images — send to Claude, GPT-4o, or l
 Dynamic multi-step task planning via the ReAct (Reason + Act) loop. The agent has 17 built-in tools (calculator, web search, stock quotes, Wikipedia, datetime, JSON parsing, regex, file reading, shell execution, working memory, screenshot, OCR, app building, chat history search), unified tool+intent dispatch, an ASK protocol for mid-task user input, PLAN display, and interactive multi-turn sessions with shared memory. Background agent heartbeat for cron-triggered scheduled tasks.
 
 **6. App Builder** *(✅ complete)*
-Prompt-to-executable pipeline. Describe an app in plain English and get a compiled Windows `.exe`. Three build lanes: PowerShell/WinForms (default — zero external deps beyond ps2exe), Python-TK (Tkinter + PyInstaller), and Python-Web (PyWebView + PyInstaller). Token budget auto-detects from model context window. Generated code is validated for syntax errors, dangerous patterns, and secret leaks before compilation. Diff-based rebuild modifies existing builds without full regeneration. Every app includes "Built with BildsyPS" branding. All builds tracked in SQLite.
+Prompt-to-executable pipeline. Describe an app in plain English and get a compiled Windows `.exe` — or a packaged PowerShell module. Five build lanes: PowerShell/WinForms (default — zero external deps beyond ps2exe), PowerShell Module (`.psm1`/`.psd1` zip, zero deps), Python-TK (Tkinter + PyInstaller), Python-Web (PyWebView + PyInstaller), and Tauri (Rust + HTML/CSS/JS). Token budget auto-detects from model context window. Generated code is validated for syntax errors, dangerous patterns, and secret leaks before compilation. Diff-based rebuild modifies existing builds without full regeneration. Every app includes "Built with BildsyPS" branding. All builds tracked in SQLite.
 
-**6b. Developer ergonomics** *(✅ complete)*
-Dynamic tab completion on all 22 newly covered public functions across 10 modules — providers, session names, skill names, workflow names, build names, MCP server names, heartbeat task IDs, artifact files, persistent alias names, and git branches. Completers are live-data: session names come from SQLite, build names from the filesystem, branch names from `git branch --list`. The `gm` alias conflict with PowerShell's built-in `Get-Member` was resolved by renaming to `gmerge`. 37 new tests verify all completers.
+**6b. Build Pipeline v2** *(✅ complete)*
+Self-improving generation loop. A **planning agent** decomposes complex specs (>150 words) into components, functions, and data models before generation. A **fix loop** retries generation up to 2 times on validation failure, feeding the full error list back to the LLM. A **review agent** checks generated code against the original spec and triggers one additional retry on mismatch. A **build memory** SQLite table stores learned constraints from past failures — these are injected into every future generation prompt so the LLM avoids known failure patterns. An **error categorizer** converts raw error text into actionable constraint strings by framework.
+
+**6c. Developer ergonomics** *(✅ complete)*
+Dynamic tab completion on all public functions — providers, session names, skill names, workflow names, build names, MCP server names, heartbeat task IDs, artifact files, persistent alias names, git branches, and now framework names. Completers are live-data: session names come from SQLite, build names from the filesystem, branch names from `git branch --list`. The `gm` alias conflict with PowerShell's built-in `Get-Member` was resolved by renaming to `gmerge`.
 
 **7. Mission control GUI** *(next)*
 A dashboard layer over the shell. Not a replacement — an amplifier. The terminal stays the engine; the GUI surfaces context, history, running tasks, and agent state in a way that's faster to scan than a command line.

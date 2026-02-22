@@ -7,7 +7,7 @@
 > Your terminal, orchestrated. BildsyPS is an AI shell environment that understands your context — your files, your git state, your running processes — and acts on your behalf. Chat with Claude, GPT, or local LLMs. Execute commands, manage files, search the web, run autonomous agents, and connect to MCP servers. All from PowerShell, all local-first, nothing phoning home.
 
 ![PowerShell](https://img.shields.io/badge/PowerShell-7.0%2B-blue)
-![Version](https://img.shields.io/badge/Version-1.3.1-blue)
+![Version](https://img.shields.io/badge/Version-1.5.0-blue)
 ![License](https://img.shields.io/badge/License-MIT-green)
 ![AI](https://img.shields.io/badge/AI-Claude%20%7C%20GPT%20%7C%20Ollama-purple)
 
@@ -91,15 +91,19 @@ builds
 rebuild my-todo-app "add a dark mode toggle"
 ```
 
-**Three build lanes:**
+**Five build lanes:**
 
-| Lane | UI Framework | Compiler | Dependencies |
-|------|-------------|----------|--------------|
-| **powershell** (default) | WinForms / WPF | ps2exe | ps2exe from PSGallery only |
-| **python-tk** | Tkinter | PyInstaller | Python 3.8+ |
-| **python-web** | PyWebView + HTML/CSS/JS | PyInstaller | Python 3.8+ + pywebview |
+| Lane | Output | Compiler | Dependencies |
+|------|--------|----------|--------------|
+| **powershell** (default) | `.exe` WinForms/WPF | ps2exe | ps2exe from PSGallery only |
+| **powershell-module** | `.zip` module package | zip | None |
+| **python-tk** | `.exe` Tkinter | PyInstaller | Python 3.8+ |
+| **python-web** | `.exe` PyWebView + HTML/CSS/JS | PyInstaller | Python 3.8+ + pywebview |
+| **tauri** | `.exe` Rust + HTML/CSS/JS | cargo | Rust toolchain + Node.js |
 
 PowerShell is the default lane — no venv, no pip, no PyInstaller. Just a direct `.ps1` → `.exe` compilation. Token budget auto-detects from your model's context window with per-lane caps and floors. Every generated app includes "Built with BildsyPS" branding.
+
+**Pipeline v2** — the generation pipeline now includes a planning agent (for complex specs), a fix loop with up to 2 auto-retries on validation failure, a review agent that checks generated code against the spec, and a build memory system that learns from past failures and injects constraints into future prompts.
 
 ### 🔧 Available Intents
 
@@ -465,10 +469,12 @@ See [VISION.md](VISION.md) for the full product direction.
 | ✅ | **OCR integration** — Tesseract for scanned docs, pdftotext for PDFs, vision API fallback |
 | ✅ | **SQLite + FTS5** — full-text search over all conversation history, session persistence |
 | ✅ | **Agent heartbeat** — cron-triggered background tasks via Windows Task Scheduler |
-| ✅ | **App Builder** — describe an app in English → get a compiled .exe (PowerShell, Python-TK, Python-Web) |
-| ✅ | **E2E test suite** — 276 tests across 15 modules, 0 failures; 11 defects fixed; Pester v5 hardened |
+| ✅ | **App Builder** — describe an app in English → get a compiled .exe (PowerShell, Python-TK, Python-Web, Tauri) |
+| ✅ | **PowerShell Module lane** — generate, validate, and package a `.psm1`/`.psd1` module as a zip |
+| ✅ | **Build Pipeline v2** — planning agent, fix loop (2 retries), review agent, build memory with constraint learning |
+| ✅ | **E2E test suite** — 133 tests, 0 failures; Pester v5 hardened |
 | ✅ | **UserSkills v2** — shell-invocable functions, `Invoke-UserSkill`, trigger phrase registration, auto-created JSON |
-| ✅ | **Tab completion** — 37 dynamic argument completers across 10 modules; `gm` → `gmerge` alias conflict resolved |
+| ✅ | **Tab completion** — dynamic argument completers across all public functions; `gm` → `gmerge` alias conflict resolved |
 | 🔜 | Browser automation — Selenium WebDriver integration |
 | 🔜 | Remote listener + webhooks — receive commands via Twilio/HTTP |
 | 🔜 | GUI layer — mission control dashboard for your entire computer |
