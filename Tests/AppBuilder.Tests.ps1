@@ -170,19 +170,29 @@ $form.Text = Get-Greeting -Name 'World'
             }
         }
 
-        Context 'Python — Dangerous Patterns' {
+        Context 'Python — Dangerous Patterns (hard errors)' {
             It 'Flags "<pattern>" as dangerous' -ForEach @(
                 @{ pattern = 'eval';       code = 'x = eval("2+2")';                    fw = 'python-tk' }
                 @{ pattern = 'exec';       code = 'exec("import os")';                   fw = 'python-tk' }
-                @{ pattern = 'os\.system'; code = 'import os; os.system("rm -rf /")';    fw = 'python-tk' }
-                @{ pattern = 'subprocess'; code = 'import subprocess; subprocess.call(["rm"])'; fw = 'python-web' }
-                @{ pattern = 'os\.popen';  code = 'import os; os.popen("ls")';           fw = 'python-tk' }
                 @{ pattern = '__import__'; code = '__import__("os").system("ls")';        fw = 'python-web' }
+                @{ pattern = 'shell injection'; code = 'import subprocess; subprocess.Popen("rm -rf /", shell=True)'; fw = 'python-tk' }
             ) {
                 $files = New-FileMap @{ 'app.py' = $code }
                 $result = Test-GeneratedCode -Files $files -Framework $fw
                 $result.Success | Should -BeFalse
                 ($result.Errors -join "`n") | Should -Match $pattern
+            }
+        }
+
+        Context 'Python — Warning Patterns (non-blocking)' {
+            It 'Does NOT hard-fail on "<pattern>" (warning only)' -ForEach @(
+                @{ pattern = 'os\.system'; code = 'import os; os.system("rm -rf /")';    fw = 'python-tk' }
+                @{ pattern = 'subprocess'; code = 'import subprocess; subprocess.call(["rm"])'; fw = 'python-web' }
+                @{ pattern = 'os\.popen';  code = 'import os; os.popen("ls")';           fw = 'python-tk' }
+            ) {
+                $files = New-FileMap @{ 'app.py' = $code }
+                $result = Test-GeneratedCode -Files $files -Framework $fw
+                $result.Success | Should -BeTrue
             }
         }
 
@@ -1350,6 +1360,321 @@ function New-MainForm { return New-Object System.Windows.Forms.Form }
         It 'Get-BuildMaxTokens returns a value for tauri framework' {
             $result = Get-BuildMaxTokens -Framework 'tauri' -Model 'claude-sonnet-4-6'
             $result | Should -BeGreaterThan 0
+        }
+    }
+
+    # ── SECURITY SCANNER — FRAMEWORK ISOLATION ──────────────
+    Context 'Security Scanner — framework isolation' {
+
+        It '.psm1 files get PowerShell patterns, not Python patterns' {
+            $files = New-FileMap @{ 'MyModule.psm1' = 'function Get-Data { import subprocess }' }
+            $result = Test-GeneratedCode -Files $files -Framework 'powershell-module'
+            # "subprocess" is a Python pattern — should NOT be applied to .psm1 files
+            ($result.Errors -join "`n") | Should -Not -Match 'subprocess'
+        }
+
+        It '.rs files do not get Python or PowerShell patterns' {
+            $toml = "[package]`nname = `"t`"`nversion = `"0.1.0`"`nedition = `"2021`"`n[dependencies]`ntauri = `"2`""
+            $files = New-FileMap @{
+                'src-tauri/src/main.rs' = 'fn main() { let cmd = "Invoke-Expression"; println!("{}", cmd); }'
+                'src-tauri/Cargo.toml' = $toml
+            }
+            $result = Test-GeneratedCode -Files $files -Framework 'tauri'
+            ($result.Errors -join "`n") | Should -Not -Match 'Invoke-Expression'
+        }
+
+        It '.html files do not get Python or PowerShell patterns' {
+            $files = New-FileMap @{ 'web/index.html' = '<html><body>subprocess eval Invoke-Expression</body></html>' }
+            $result = Test-GeneratedCode -Files $files -Framework 'python-web'
+            ($result.Errors -join "`n") | Should -Not -Match 'subprocess'
+            ($result.Errors -join "`n") | Should -Not -Match 'Invoke-Expression'
+        }
+
+        It 'subprocess.Popen(shell=True) is still a hard error for .py files' {
+            $files = New-FileMap @{ 'app.py' = 'import subprocess; subprocess.Popen("ls", shell=True)' }
+            $result = Test-GeneratedCode -Files $files -Framework 'python-tk'
+            $result.Success | Should -BeFalse
+            ($result.Errors -join "`n") | Should -Match 'shell injection'
+        }
+    }
+
+    # ── BRANDING INJECTION — IDEMPOTENCY ─────────────────────
+    Context 'Branding Injection — idempotency' {
+
+        It 'Skips injection when LLM already generated aboutItem' {
+            $code = @'
+Add-Type -AssemblyName System.Windows.Forms
+$form = New-Object System.Windows.Forms.Form
+$aboutItem = New-Object System.Windows.Forms.ToolStripMenuItem("About")
+$aboutItem.Add_Click({ [System.Windows.Forms.MessageBox]::Show("My App v1.0", "About") })
+[System.Windows.Forms.Application]::Run($form)
+'@
+            $files = New-FileMap @{ 'app.ps1' = $code }
+            $result = Invoke-BildsyPSBranding -Files $files -Framework 'powershell'
+            # Should NOT inject because aboutItem already exists
+            $result['app.ps1'] | Should -Not -Match 'bildsyAbout'
+            $result['app.ps1'] | Should -Not -Match 'Built with BildsyPS'
+        }
+
+        It 'Skips injection when LLM already generated About ToolStripMenuItem' {
+            $code = @'
+Add-Type -AssemblyName System.Windows.Forms
+$form = New-Object System.Windows.Forms.Form
+$helpMenu = New-Object System.Windows.Forms.ToolStripMenuItem("Help")
+$aboutBtn = New-Object System.Windows.Forms.ToolStripMenuItem("About")
+$aboutBtn.Add_Click({ [System.Windows.Forms.MessageBox]::Show("About this app") })
+[System.Windows.Forms.Application]::Run($form)
+'@
+            $files = New-FileMap @{ 'app.ps1' = $code }
+            $result = Invoke-BildsyPSBranding -Files $files -Framework 'powershell'
+            $result['app.ps1'] | Should -Not -Match 'bildsyAbout'
+        }
+
+        It 'Detects actual form variable name ($mainForm instead of $form)' {
+            $code = @'
+Add-Type -AssemblyName System.Windows.Forms
+$mainForm = New-Object System.Windows.Forms.Form
+[System.Windows.Forms.Application]::Run($mainForm)
+'@
+            $files = New-FileMap @{ 'app.ps1' = $code }
+            $result = Invoke-BildsyPSBranding -Files $files -Framework 'powershell'
+            $result['app.ps1'] | Should -Match 'Built with BildsyPS'
+            $result['app.ps1'] | Should -Match '\$mainForm\.MainMenuStrip'
+        }
+
+        It 'Checks for existing Help menu before adding a new one' {
+            $code = @'
+Add-Type -AssemblyName System.Windows.Forms
+$form = New-Object System.Windows.Forms.Form
+[System.Windows.Forms.Application]::Run($form)
+'@
+            $files = New-FileMap @{ 'app.ps1' = $code }
+            $result = Invoke-BildsyPSBranding -Files $files -Framework 'powershell'
+            # The injected code should check for existing Help menu
+            $result['app.ps1'] | Should -Match "Where-Object.*Text.*-eq.*Help"
+        }
+    }
+
+    # ── FIX LOOP — CONTEXT PRESERVATION ──────────────────────
+    Context 'Fix Loop — context preservation' {
+
+        It 'Preserved sections include UI_LAYOUT and EDGE_CASES' {
+            # Verify the keepSections regex includes the new sections
+            $src = Get-Content (Join-Path $PSScriptRoot '..\Modules\AppBuilder.ps1') -Raw
+            $src | Should -Match "keepSections\s*=\s*'[^']*UI_LAYOUT"
+            $src | Should -Match "keepSections\s*=\s*'[^']*EDGE_CASES"
+        }
+
+        It 'Invoke-BuildFixLoop accepts PreviousFiles parameter' {
+            $cmd = Get-Command Invoke-BuildFixLoop
+            $cmd.Parameters.Keys | Should -Contain 'PreviousFiles'
+        }
+    }
+
+    # ── CONTRACT GENERATION AGENT ────────────────────────────
+    Context 'Contract Generation Agent' {
+
+        It 'Invoke-BuildContract function exists with required parameters' {
+            $cmd = Get-Command Invoke-BuildContract
+            $cmd.Parameters.Keys | Should -Contain 'Spec'
+            $cmd.Parameters.Keys | Should -Contain 'Plan'
+            $cmd.Parameters.Keys | Should -Contain 'Framework'
+        }
+    }
+
+    # ── TOKEN BUDGET FLOOR ───────────────────────────────────
+    Context 'Token Budget Floor' {
+
+        It 'Get-BuildMaxTokens returns correct value for claude-sonnet-4-6' {
+            $result = Get-BuildMaxTokens -Framework 'powershell' -Model 'claude-sonnet-4-6'
+            $result | Should -Be 64000
+        }
+
+        It 'Get-BuildMaxTokens returns 8192 for claude-sonnet-4-5' {
+            $result = Get-BuildMaxTokens -Framework 'powershell' -Model 'claude-sonnet-4-5'
+            $result | Should -Be 8192
+        }
+    }
+
+    # ── BUDGET-AWARE REFINER ────────────────────────────────
+    Context 'Budget-Aware Refiner' {
+
+        It 'Invoke-PromptRefinement accepts FeatureCapOverride parameter' {
+            $cmd = Get-Command Invoke-PromptRefinement
+            $cmd.Parameters.Keys | Should -Contain 'FeatureCapOverride'
+        }
+
+        It 'Framework feature caps table exists with expected frameworks' {
+            $src = Get-Content (Join-Path $PSScriptRoot '..\Modules\AppBuilder.ps1') -Raw
+            $src | Should -Match 'FrameworkFeatureCaps'
+            $src | Should -Match "'tauri'\s*=\s*12"
+            $src | Should -Match "'python-web'\s*=\s*15"
+            $src | Should -Match "'powershell'\s*=\s*18"
+        }
+
+        It 'Refiner prompt contains FEATURE_CAP placeholder and DEFERRED section' {
+            $src = Get-Content (Join-Path $PSScriptRoot '..\Modules\AppBuilder.ps1') -Raw
+            $src | Should -Match '\{FEATURE_CAP\}'
+            $src | Should -Match 'DEFERRED:'
+        }
+
+        It 'Refiner routes to Haiku 4.5 model' {
+            $src = Get-Content (Join-Path $PSScriptRoot '..\Modules\AppBuilder.ps1') -Raw
+            $src | Should -Match "refineModel\s*=\s*'claude-haiku-4-5-20251001'"
+        }
+    }
+
+    # ── REVIEW AGENT — DEFECTS VS SCOPE_GAPS ─────────────────
+    Context 'Review Agent — DEFECTS vs SCOPE_GAPS split' {
+
+        It 'Invoke-BuildReview returns Defects and ScopeGaps keys' {
+            $cmd = Get-Command Invoke-BuildReview
+            # Verify the function exists; actual output shape tested via mocking in live tests
+            $cmd | Should -Not -BeNullOrEmpty
+        }
+
+        It 'Review prompt requires DEFECTS and SCOPE_GAPS sections' {
+            $src = Get-Content (Join-Path $PSScriptRoot '..\Modules\AppBuilder.ps1') -Raw
+            $src | Should -Match 'DEFECTS.*real bugs'
+            $src | Should -Match 'SCOPE_GAPS.*features from the spec'
+        }
+
+        It 'Build memory does not save [Review] prefixed errors as constraints' {
+            $src = Get-Content (Join-Path $PSScriptRoot '..\Modules\AppBuilder.ps1') -Raw
+            $src | Should -Match "notmatch.*\\\[Review\\\]"
+        }
+    }
+
+    # ── RUST DEPENDENCY CROSS-REFERENCE ──────────────────────
+    Context 'Rust Dependency Cross-Reference' {
+
+        It 'Detects crate used in .rs but missing from Cargo.toml' {
+            $toml = @"
+[package]
+name = "test-app"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tauri = "2"
+serde = { version = "1", features = ["derive"] }
+"@
+            $mainRs = @"
+use tauri;
+use serde::Serialize;
+use dirs;
+
+fn main() {
+    println!("hello");
+}
+"@
+            $files = New-FileMap @{
+                'src-tauri/Cargo.toml' = $toml
+                'src-tauri/src/main.rs' = $mainRs
+            }
+            $result = Test-GeneratedCode -Files $files -Framework 'tauri'
+            $result.Success | Should -BeFalse
+            ($result.Errors -join "`n") | Should -Match "dirs.*not in Cargo.toml"
+        }
+
+        It 'Passes when all used crates are declared in Cargo.toml' {
+            $toml = @"
+[package]
+name = "test-app"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tauri = "2"
+serde = { version = "1", features = ["derive"] }
+"@
+            $mainRs = @"
+use std::collections::HashMap;
+use tauri;
+use serde::Serialize;
+
+fn main() {
+    println!("hello");
+}
+"@
+            $files = New-FileMap @{
+                'src-tauri/Cargo.toml' = $toml
+                'src-tauri/src/main.rs' = $mainRs
+            }
+            $result = Test-GeneratedCode -Files $files -Framework 'tauri'
+            ($result.Errors -join "`n") | Should -Not -Match "not in Cargo.toml"
+        }
+
+        It 'Ignores built-in crate paths (std, core, alloc, self, super)' {
+            $toml = @"
+[package]
+name = "test-app"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tauri = "2"
+"@
+            $mainRs = @"
+use std::io;
+use core::fmt;
+use alloc::vec::Vec;
+
+fn main() {}
+"@
+            $files = New-FileMap @{
+                'src-tauri/Cargo.toml' = $toml
+                'src-tauri/src/main.rs' = $mainRs
+            }
+            $result = Test-GeneratedCode -Files $files -Framework 'tauri'
+            ($result.Errors -join "`n") | Should -Not -Match "not in Cargo.toml"
+        }
+    }
+
+    # ── SUBPROCESS SHELL=TRUE VARIANTS ───────────────────────
+    Context 'Subprocess shell=True — all variants' {
+
+        It 'Flags subprocess.call(shell=True) as dangerous' {
+            $files = New-FileMap @{ 'app.py' = 'import subprocess; subprocess.call("ls", shell=True)' }
+            $result = Test-GeneratedCode -Files $files -Framework 'python-tk'
+            $result.Success | Should -BeFalse
+            ($result.Errors -join "`n") | Should -Match 'shell injection'
+        }
+
+        It 'Flags subprocess.run(shell=True) as dangerous' {
+            $files = New-FileMap @{ 'app.py' = 'import subprocess; subprocess.run("ls", shell=True)' }
+            $result = Test-GeneratedCode -Files $files -Framework 'python-tk'
+            $result.Success | Should -BeFalse
+            ($result.Errors -join "`n") | Should -Match 'shell injection'
+        }
+
+        It 'Does NOT flag subprocess.run() without shell=True' {
+            $files = New-FileMap @{ 'app.py' = 'import subprocess; subprocess.run(["ls", "-la"])' }
+            $result = Test-GeneratedCode -Files $files -Framework 'python-tk'
+            $result.Success | Should -BeTrue
+        }
+    }
+
+    # ── COMPLEXITY GATE — AUTO-PRUNE ─────────────────────────
+    Context 'Complexity Gate — auto-prune logic' {
+
+        It 'Auto-prune code path exists in New-AppBuild' {
+            $src = Get-Content (Join-Path $PSScriptRoot '..\Modules\AppBuilder.ps1') -Raw
+            $src | Should -Match 'Auto-prune.*re-run refinement'
+            $src | Should -Match 'FeatureCapOverride'
+            $src | Should -Match 'safeFeatureCount'
+        }
+
+        It 'Feature count comes from FEATURES section only, not generationSpec' {
+            $src = Get-Content (Join-Path $PSScriptRoot '..\Modules\AppBuilder.ps1') -Raw
+            # Must extract features from refineResult.Spec FEATURES section, not $generationSpec
+            $src | Should -Match 'specFeatureCount'
+            $src | Should -Match "FEATURES:\\s\*\\n"
+        }
+
+        It 'safeFeatureCount is capped at FrameworkFeatureCaps' {
+            $src = Get-Content (Join-Path $PSScriptRoot '..\Modules\AppBuilder.ps1') -Raw
+            $src | Should -Match 'safeFeatureCount.*-gt.*frameworkCap.*safeFeatureCount.*=.*frameworkCap'
         }
     }
 

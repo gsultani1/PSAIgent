@@ -17,9 +17,14 @@ $script:DangerousPythonPatterns = @(
     @{ Pattern = '\b__import__\s*\(';    Name = '__import__()' }
     @{ Pattern = '\bpickle\.loads\s*\('; Name = 'pickle.loads()' }
     @{ Pattern = '\bmarshal\.loads\s*\('; Name = 'marshal.loads()' }
-    @{ Pattern = '\bos\.popen\s*\(';     Name = 'os.popen()' }
-    @{ Pattern = '\bos\.system\s*\(';    Name = 'os.system()' }
-    @{ Pattern = '\bsubprocess\b';       Name = 'subprocess' }
+    @{ Pattern = 'subprocess\.(Popen|call|run)\s*\(.*shell\s*=\s*True'; Name = 'subprocess shell=True — shell injection risk' }
+)
+
+# Patterns that produce warnings, not hard errors (legitimate in many apps)
+$script:WarningPythonPatterns = @(
+    @{ Pattern = '\bos\.popen\s*\(';     Name = 'os.popen() — consider subprocess.run() instead' }
+    @{ Pattern = '\bos\.system\s*\(';    Name = 'os.system() — consider subprocess.run() instead' }
+    @{ Pattern = '\bsubprocess\b';       Name = 'subprocess — verify arguments are not user-controlled' }
 )
 
 $script:DangerousPowerShellPatterns = @(
@@ -69,10 +74,23 @@ $script:ThemePresets = @{
     }
 }
 
+# ── Framework feature caps (max features the refiner should produce per framework) ──
+$script:FrameworkFeatureCaps = @{
+    'tauri'             = 12   # Rust + HTML + CSS + JS + Cargo.toml + tauri.conf.json + build.rs = huge per-feature cost
+    'python-web'        = 15   # Python + HTML + CSS + JS
+    'powershell'        = 18   # Single-language, WinForms
+    'python-tk'         = 18   # Single-file, stdlib only
+    'powershell-module' = 20   # No UI overhead
+}
+
 # ===== System Prompts =====
 
 $script:BuilderRefinePrompt = @'
 You are an application specification writer. Given a user's natural language description of an app they want built, produce a structured specification. Output ZERO code.
+
+BUDGET: You have approximately {FEATURE_CAP} features worth of implementation budget. Do NOT exceed this. Each feature is one concrete capability (e.g. "add item with name, quantity, price fields"), not a paragraph.
+
+Prioritization: Identify the user's core intent. Rank features by importance. The top {FEATURE_CAP} go in FEATURES as MUST-HAVE. Any remaining go in DEFERRED.
 
 Output format (use these exact delimiters):
 
@@ -91,9 +109,11 @@ STYLING:
 {THEME_STYLE}
 EDGE_CASES:
 - input validation, error states, empty states
+DEFERRED:
+- lower-priority feature that was cut from budget (can be added later via Update-AppBuild)
 ---END SPECIFICATION---
 
-Be specific and detailed. The specification will be handed to a code generator.
+Be specific but concise. Each feature should be one concrete capability, not a paragraph. The specification will be handed to a code generator with a limited output budget.
 '@
 
 $script:BuilderPowerShellPrompt = @'
@@ -434,13 +454,15 @@ function Invoke-PromptRefinement {
     <#
     .SYNOPSIS
     LLM call #1: Convert user prompt into structured specification. No code generated.
+    Routes to Haiku 4.5 for speed/cost — refinement is structured decomposition, not creative generation.
     #>
     param(
         [Parameter(Mandatory)][string]$Prompt,
         [Parameter(Mandatory)][string]$Framework,
         [string]$Provider,
         [string]$Model,
-        [string]$Theme = 'system'
+        [string]$Theme = 'system',
+        [int]$FeatureCapOverride = 0
     )
 
     $frameworkLabel = switch ($Framework) {
@@ -451,38 +473,60 @@ function Invoke-PromptRefinement {
         'tauri'             { 'TAURI_V2 (Rust backend + HTML/CSS/JS frontend, native desktop app)' }
     }
 
+    # Compute feature cap from framework table or override (for auto-prune re-runs)
+    $featureCap = if ($FeatureCapOverride -gt 0) { $FeatureCapOverride }
+                  elseif ($script:FrameworkFeatureCaps.ContainsKey($Framework)) { $script:FrameworkFeatureCaps[$Framework] }
+                  else { 15 }
+
     $themeStyle = $script:ThemePresets[$Theme]['refine']
     $systemPrompt = $script:BuilderRefinePrompt -replace '\{FRAMEWORK_PLACEHOLDER\}', $frameworkLabel
     $systemPrompt = $systemPrompt -replace '\{THEME_STYLE\}', $themeStyle
+    $systemPrompt = $systemPrompt -replace '\{FEATURE_CAP\}', "$featureCap"
 
     $messages = @(
         @{ role = 'user'; content = "Build me this app: $Prompt" }
     )
+
+    # Route refinement to Haiku 4.5 for speed/cost — structured decomposition doesn't need Sonnet
+    $refineModel = 'claude-haiku-4-5-20251001'
+    $refineProvider = if ($Provider) { $Provider } else { $null }
 
     $params = @{
         Messages     = $messages
         SystemPrompt = $systemPrompt
         MaxTokens    = 2048
         Temperature  = 0.4
+        Model        = $refineModel
     }
-    if ($Provider) { $params.Provider = $Provider }
-    if ($Model) { $params.Model = $Model }
+    if ($refineProvider) { $params.Provider = $refineProvider }
 
     try {
+        Write-Host "[AppBuilder] Refining prompt (feature cap: $featureCap, model: $refineModel)..." -ForegroundColor Cyan
         $response = Invoke-ChatCompletion @params
         $content = if ($response.Content) { $response.Content } else { "$response" }
 
         # Parse specification block
+        $spec = $content
         if ($content -match '(?s)---BEGIN SPECIFICATION---(.+?)---END SPECIFICATION---') {
-            return @{
-                Success = $true
-                Spec    = $Matches[1].Trim()
-                Raw     = $content
-            }
+            $spec = $Matches[1].Trim()
         }
 
-        # Fallback: use entire response as spec
-        return @{ Success = $true; Spec = $content; Raw = $content }
+        # Parse DEFERRED section from the spec
+        $deferred = @()
+        if ($spec -match '(?s)DEFERRED:\s*\n(.+?)(?:\n[A-Z_]{3,}:|\z)') {
+            $deferredBlock = $Matches[1]
+            $deferred = @($deferredBlock -split "`n" | ForEach-Object {
+                $line = $_.Trim() -replace '^-\s*', ''
+                if ($line -and $line.Length -gt 3) { $line }
+            } | Where-Object { $_ })
+        }
+
+        return @{
+            Success  = $true
+            Spec     = $spec
+            Deferred = $deferred
+            Raw      = $content
+        }
     }
     catch {
         return @{ Success = $false; Output = "Refinement failed: $($_.Exception.Message)" }
@@ -559,13 +603,77 @@ Be concise. Output ONLY the plan structure, no code.
     }
 }
 
+# ===== Contract Generation Agent =====
+
+function Invoke-BuildContract {
+    <#
+    .SYNOPSIS
+    LLM call: Generate file-level interface contracts for complex specs.
+    Produces function signatures, shared state, event names, and data schemas
+    that the code generation call uses as hard constraints.
+    Triggers only when planning also triggered (spec > 150 words).
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Spec,
+        [Parameter(Mandatory)][string]$Plan,
+        [Parameter(Mandatory)][string]$Framework,
+        [string]$Provider,
+        [string]$Model
+    )
+
+    $contractPrompt = @"
+You are a software architect. Given an application spec and implementation plan, produce explicit file-level interface contracts.
+
+Output format (use EXACTLY these section headers):
+FILE_CONTRACTS:
+- filename: list of function/method signatures with parameter types
+SHARED_STATE:
+- variable/field name: type and purpose
+EVENTS:
+- event name: trigger condition and handler signature
+DATA_SCHEMAS:
+- entity name: fields with types
+
+Rules:
+- Use the target language syntax for signatures ($Framework)
+- Be precise about parameter and return types
+- List only public/exported interfaces, not internal helpers
+- Keep it concise — this is a contract, not implementation
+"@
+
+    $messages = @(
+        @{ role = 'user'; content = "Generate interface contracts for this app:`n`nSPECIFICATION:`n$Spec`n`nIMPLEMENTATION PLAN:`n$Plan" }
+    )
+
+    $params = @{
+        Messages     = $messages
+        SystemPrompt = $contractPrompt
+        MaxTokens    = 1024
+        Temperature  = 0.2
+    }
+    if ($Provider) { $params.Provider = $Provider }
+    if ($Model) { $params.Model = $Model }
+
+    try {
+        Write-Host "[AppBuilder] Generating interface contracts..." -ForegroundColor Cyan
+        $response = Invoke-ChatCompletion @params
+        $contract = if ($response.Content) { $response.Content } else { "$response" }
+        return @{ Success = $true; Contract = $contract }
+    }
+    catch {
+        Write-Host "[AppBuilder] Contract generation failed (non-fatal): $($_.Exception.Message)" -ForegroundColor Yellow
+        return @{ Success = $true; Contract = $null }
+    }
+}
+
 # ===== Review Agent =====
 
 function Invoke-BuildReview {
     <#
     .SYNOPSIS
     LLM call: Check generated code against the specification for alignment.
-    Returns pass/fail with specific issues.
+    Splits output into DEFECTS (must fix) and SCOPE_GAPS (report only).
     #>
     [CmdletBinding()]
     param(
@@ -577,19 +685,28 @@ function Invoke-BuildReview {
     )
 
     $reviewPrompt = @'
-You are a code reviewer. Compare the generated code against the specification and check:
-1. Do all specified FEATURES exist in the code?
-2. Is the DATA_MODEL implemented as specified?
-3. Are EDGE_CASES from the spec addressed?
-4. Is the UI_LAYOUT correct (if applicable)?
+You are a code reviewer. Compare the generated code against the specification and identify issues in TWO categories:
+
+DEFECTS — real bugs that will cause compilation failure, runtime crashes, or security vulnerabilities:
+  - Missing imports/dependencies referenced in code
+  - Syntax errors or broken references between files
+  - Security flaws (unescaped user input, missing sanitization)
+  - Broken data flow (function called but not defined, wrong parameter types)
+
+SCOPE_GAPS — features from the spec that are not implemented but the app still works without them:
+  - Missing UI elements or features from the spec
+  - Incomplete functionality that doesn't break existing code
+  - Missing optional features like export formats, advanced filters, etc.
 
 Output format:
 PASSED: true/false
-ISSUES:
-- issue description (if any)
+DEFECTS:
+- [filename] description of defect
+SCOPE_GAPS:
+- description of missing feature
 
-If all features are implemented correctly, output PASSED: true with no issues.
-Be strict but fair. Minor style differences are acceptable.
+If there are no defects AND no scope gaps, output PASSED: true.
+Set PASSED: false only if there are DEFECTS. Scope gaps alone do NOT cause failure.
 '@
 
     $codeContext = ($Files.Keys | ForEach-Object {
@@ -615,23 +732,44 @@ Be strict but fair. Minor style differences are acceptable.
         $content = if ($response.Content) { $response.Content } else { "$response" }
 
         $passed = $content -match 'PASSED:\s*true'
-        $issues = [System.Collections.Generic.List[string]]::new()
+        $defects = [System.Collections.Generic.List[string]]::new()
+        $scopeGaps = [System.Collections.Generic.List[string]]::new()
 
-        if (-not $passed -and $content -match '(?s)ISSUES:\s*\n(.+)') {
-            $issueBlock = $Matches[1]
-            foreach ($line in ($issueBlock -split "`n")) {
+        # Parse DEFECTS section
+        if ($content -match '(?s)DEFECTS:\s*\n(.+?)(?:\nSCOPE_GAPS:|\nPASSED:|\z)') {
+            foreach ($line in ($Matches[1] -split "`n")) {
                 $trimmed = $line.Trim() -replace '^-\s*', ''
-                if ($trimmed -and $trimmed.Length -gt 3) {
-                    $issues.Add($trimmed)
+                if ($trimmed -and $trimmed.Length -gt 3 -and $trimmed -notmatch '^(None|N/A|No defects)') {
+                    $defects.Add($trimmed)
                 }
             }
         }
 
-        return @{ Passed = $passed; Issues = @($issues); Raw = $content }
+        # Parse SCOPE_GAPS section
+        if ($content -match '(?s)SCOPE_GAPS:\s*\n(.+?)(?:\nDEFECTS:|\nPASSED:|\z)') {
+            foreach ($line in ($Matches[1] -split "`n")) {
+                $trimmed = $line.Trim() -replace '^-\s*', ''
+                if ($trimmed -and $trimmed.Length -gt 3 -and $trimmed -notmatch '^(None|N/A|No scope gaps)') {
+                    $scopeGaps.Add($trimmed)
+                }
+            }
+        }
+
+        # Legacy fallback: if no DEFECTS/SCOPE_GAPS sections, parse ISSUES as defects
+        if ($defects.Count -eq 0 -and $scopeGaps.Count -eq 0 -and $content -match '(?s)ISSUES:\s*\n(.+)') {
+            foreach ($line in ($Matches[1] -split "`n")) {
+                $trimmed = $line.Trim() -replace '^-\s*', ''
+                if ($trimmed -and $trimmed.Length -gt 3) {
+                    $defects.Add($trimmed)
+                }
+            }
+        }
+
+        return @{ Passed = $passed; Defects = @($defects); ScopeGaps = @($scopeGaps); Issues = @($defects); Raw = $content }
     }
     catch {
         Write-Host "[AppBuilder] Review failed (non-fatal): $($_.Exception.Message)" -ForegroundColor Yellow
-        return @{ Passed = $true; Issues = @(); Raw = '' }
+        return @{ Passed = $true; Defects = @(); ScopeGaps = @(); Issues = @(); Raw = '' }
     }
 }
 
@@ -1012,16 +1150,26 @@ function Test-GeneratedCode {
             }
         }
 
-        # Security scan: language-aware dangerous patterns
+        # Security scan: language-aware dangerous patterns (only apply to matching file types)
         $dangerousPatterns = switch ($ext) {
-            '.ps1' { $script:DangerousPowerShellPatterns }
-            '.py'  { $script:DangerousPythonPatterns }
-            default { $script:DangerousPowerShellPatterns + $script:DangerousPythonPatterns }
+            '.ps1'  { $script:DangerousPowerShellPatterns }
+            '.psm1' { $script:DangerousPowerShellPatterns }
+            '.py'   { $script:DangerousPythonPatterns }
+            default { @() }
         }
 
         foreach ($dp in $dangerousPatterns) {
             if ($code -match $dp.Pattern) {
                 $errors.Add("[$fileName] Security: contains $($dp.Name)")
+            }
+        }
+
+        # Non-blocking warnings for Python patterns that are legitimate but worth noting
+        if ($ext -eq '.py') {
+            foreach ($wp in $script:WarningPythonPatterns) {
+                if ($code -match $wp.Pattern) {
+                    Write-Host "[$fileName] Warning: $($wp.Name)" -ForegroundColor Yellow
+                }
             }
         }
 
@@ -1078,6 +1226,35 @@ function Test-GeneratedCode {
         }
         else {
             $errors.Add("[Tauri] Missing Cargo.toml")
+        }
+
+        # Cross-reference: check that crates used in .rs files are declared in [dependencies]
+        if ($tomlFile -and $tomlContent -match '\[dependencies\]') {
+            # Extract declared crate names from Cargo.toml (handles name = "version" and name = { ... })
+            $declaredCrates = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+            $inDeps = $false
+            foreach ($tomlLine in ($tomlContent -split "`n")) {
+                if ($tomlLine -match '^\s*\[dependencies\]') { $inDeps = $true; continue }
+                if ($tomlLine -match '^\s*\[' -and $inDeps) { $inDeps = $false; continue }
+                if ($inDeps -and $tomlLine -match '^\s*([\w][\w-]*)\s*=') {
+                    $null = $declaredCrates.Add(($Matches[1] -replace '-', '_'))
+                }
+            }
+            # Built-in crate paths that don't need to be in [dependencies]
+            $builtinCrates = @('std', 'core', 'alloc', 'crate', 'self', 'super')
+            foreach ($bi in $builtinCrates) { $null = $declaredCrates.Add($bi) }
+
+            foreach ($rsFile in $rsFiles) {
+                $rsCode = $Files[$rsFile]
+                # Match both 'use crate::path' and 'use crate;' patterns
+                $useMatches = [regex]::Matches($rsCode, 'use\s+(\w+)\s*(?:::|;)')
+                foreach ($m in $useMatches) {
+                    $crateName = $m.Groups[1].Value
+                    if (-not $declaredCrates.Contains($crateName)) {
+                        $errors.Add("[$rsFile] Rust: uses crate '$crateName' but it's not in Cargo.toml [dependencies]")
+                    }
+                }
+            }
         }
 
         # Basic Rust syntax: check balanced braces in each .rs file
@@ -1166,6 +1343,8 @@ function Invoke-BuildFixLoop {
     <#
     .SYNOPSIS
     Retry code generation when validation fails, feeding errors back to the LLM.
+    Uses surgical file repair when errors are isolated to specific files.
+    Falls back to full regeneration when errors are structural.
     Saves learned constraints to build memory on final failure.
     #>
     [CmdletBinding()]
@@ -1173,6 +1352,7 @@ function Invoke-BuildFixLoop {
         [Parameter(Mandatory)][string]$Spec,
         [Parameter(Mandatory)][string]$Framework,
         [Parameter(Mandatory)][array]$Errors,
+        [hashtable]$PreviousFiles,
         [int]$MaxTokens,
         [string]$Provider,
         [string]$Model,
@@ -1180,32 +1360,100 @@ function Invoke-BuildFixLoop {
         [int]$MaxRetries = 3
     )
 
+    $currentFiles = if ($PreviousFiles) { $PreviousFiles.Clone() } else { $null }
+
     for ($retry = 1; $retry -le $MaxRetries; $retry++) {
         $errorBlock = ($Errors | ForEach-Object { "- $_" }) -join "`n"
-        if ($retry -le 1) {
-            $fixSpec = "PREVIOUS ATTEMPT FAILED with these errors:`n$errorBlock`n`nFix ALL of the above errors. Original specification:`n$Spec"
+
+        # Determine if errors are isolated to specific files (surgical repair candidate)
+        $errorFiles = @($Errors | ForEach-Object {
+            if ($_ -match '^\[([^\]]+)\]') { $Matches[1] }
+        } | Sort-Object -Unique)
+        $useSurgical = $currentFiles -and $errorFiles.Count -gt 0 -and $errorFiles.Count -lt $currentFiles.Count
+
+        if ($useSurgical) {
+            # Surgical repair: only regenerate broken files, keep working files intact
+            $brokenFiles = @{}
+            $workingFiles = @{}
+            foreach ($fn in $currentFiles.Keys) {
+                if ($errorFiles -contains $fn) {
+                    $brokenFiles[$fn] = $currentFiles[$fn]
+                }
+                else {
+                    $workingFiles[$fn] = $currentFiles[$fn]
+                }
+            }
+
+            # Build interface contract from working files (function signatures, shared state)
+            $contractLines = [System.Collections.Generic.List[string]]::new()
+            foreach ($wfn in $workingFiles.Keys) {
+                $wext = [System.IO.Path]::GetExtension($wfn).ToLower()
+                $wcode = $workingFiles[$wfn]
+                if ($wext -eq '.ps1' -or $wext -eq '.psm1') {
+                    $funcs = [regex]::Matches($wcode, 'function\s+([\w-]+)\s*\{') | ForEach-Object { $_.Groups[1].Value }
+                    if ($funcs) { $contractLines.Add("# $wfn exports: $($funcs -join ', ')") }
+                }
+                elseif ($wext -eq '.py') {
+                    $funcs = [regex]::Matches($wcode, 'def\s+(\w+)\s*\(') | ForEach-Object { $_.Groups[1].Value }
+                    if ($funcs) { $contractLines.Add("# $wfn exports: $($funcs -join ', ')") }
+                }
+                elseif ($wext -eq '.rs') {
+                    $funcs = [regex]::Matches($wcode, '(pub\s+)?fn\s+(\w+)') | ForEach-Object { $_.Groups[2].Value }
+                    if ($funcs) { $contractLines.Add("# $wfn exports: $($funcs -join ', ')") }
+                }
+            }
+            $contract = if ($contractLines.Count -gt 0) { "`nINTERFACE CONTRACT (from working files):`n$($contractLines -join "`n")" } else { '' }
+
+            $brokenBlock = ($brokenFiles.Keys | ForEach-Object { "--- $_ ---`n$($brokenFiles[$_])" }) -join "`n`n"
+            $fixSpec = "SURGICAL FIX — only these file(s) have errors:`n$errorBlock`n`nFILE(S) TO FIX:`n$brokenBlock$contract`n`nRegenerate ONLY the broken file(s). Output each file with its filename on the fence line."
+
+            Write-Host "[AppBuilder] Fix attempt $retry/$MaxRetries (surgical: $($brokenFiles.Count) file(s))..." -ForegroundColor Yellow
         }
         else {
-            # On later retries, preserve FEATURES + DATA_MODEL sections but trim the rest
-            $specSections = [System.Collections.Generic.List[string]]::new()
-            $specLines = $Spec -split "`n"
-            $inKeepSection = $false
-            foreach ($sl in $specLines) {
-                if ($sl -match '^\s*(FEATURES|DATA_MODEL|APP_NAME|FRAMEWORK)\s*:') { $inKeepSection = $true }
-                elseif ($sl -match '^\s*[A-Z_]{3,}\s*:' -and $sl -notmatch 'FEATURES|DATA_MODEL|APP_NAME|FRAMEWORK') { $inKeepSection = $false }
-                if ($inKeepSection -or $specSections.Count -lt 5) { $specSections.Add($sl) }
+            # Full regeneration
+            if ($retry -le 1) {
+                $fixSpec = "PREVIOUS ATTEMPT FAILED with these errors:`n$errorBlock`n`nFix ALL of the above errors. Original specification:`n$Spec"
             }
-            $condensedSpec = $specSections -join "`n"
-            $fixSpec = "ATTEMPT $retry FIX — the following errors STILL remain:`n$errorBlock`n`nFix ONLY these remaining errors. Keep all working code intact. Key spec sections:`n$condensedSpec"
-        }
+            else {
+                # Preserve key spec sections on later retries
+                $keepSections = 'FEATURES|DATA_MODEL|UI_LAYOUT|EDGE_CASES|APP_NAME|FRAMEWORK'
+                $specSections = [System.Collections.Generic.List[string]]::new()
+                $specLines = $Spec -split "`n"
+                $inKeepSection = $false
+                foreach ($sl in $specLines) {
+                    if ($sl -match "^\s*($keepSections)\s*:") { $inKeepSection = $true }
+                    elseif ($sl -match '^\s*[A-Z_]{3,}\s*:' -and $sl -notmatch $keepSections) { $inKeepSection = $false }
+                    if ($inKeepSection -or $specSections.Count -lt 5) { $specSections.Add($sl) }
+                }
+                $condensedSpec = $specSections -join "`n"
+                $fixSpec = "ATTEMPT $retry FIX — the following errors STILL remain:`n$errorBlock`n`nFix ONLY these remaining errors. Keep all working code intact. Key spec sections:`n$condensedSpec"
+            }
 
-        Write-Host "[AppBuilder] Fix attempt $retry/$MaxRetries..." -ForegroundColor Yellow
+            Write-Host "[AppBuilder] Fix attempt $retry/$MaxRetries (full regeneration)..." -ForegroundColor Yellow
+        }
 
         $codeResult = Invoke-CodeGeneration -Spec $fixSpec -Framework $Framework `
             -MaxTokens $MaxTokens -Provider $Provider -Model $Model -Theme $Theme
         if (-not $codeResult.Success) {
             Write-Host "[AppBuilder] Fix attempt $retry generation failed: $($codeResult.Output)" -ForegroundColor Red
             continue
+        }
+
+        # For surgical repair, merge fixed files back into the working set
+        if ($useSurgical -and $currentFiles) {
+            foreach ($fn in $codeResult.Files.Keys) {
+                $currentFiles[$fn] = $codeResult.Files[$fn]
+            }
+            # Also keep any working files that weren't in the regenerated output
+            foreach ($fn in $workingFiles.Keys) {
+                if (-not $codeResult.Files.ContainsKey($fn)) {
+                    $currentFiles[$fn] = $workingFiles[$fn]
+                }
+            }
+            $codeResult.Files = $currentFiles.Clone()
+        }
+        else {
+            $currentFiles = $codeResult.Files.Clone()
         }
 
         $null = Repair-GeneratedCode -Files $codeResult.Files -Framework $Framework
@@ -1221,11 +1469,15 @@ function Invoke-BuildFixLoop {
     }
 
     # All retries exhausted — save constraints to build memory
-    foreach ($err in $Errors) {
+    # Filter out [Review] prefixed errors — these are scope gaps, not compilation/validation failures
+    $constraintErrors = @($Errors | Where-Object { $_ -notmatch '^\[Review\]' })
+    foreach ($err in $constraintErrors) {
         $constraint = ConvertTo-BuildConstraint -ErrorText $err -Framework $Framework
         Save-BuildConstraint -Framework $Framework -Constraint $constraint -ErrorPattern $err
     }
-    Write-Host "[AppBuilder] Saved $($Errors.Count) constraint(s) to build memory for future builds." -ForegroundColor DarkYellow
+    if ($constraintErrors.Count -gt 0) {
+        Write-Host "[AppBuilder] Saved $($constraintErrors.Count) constraint(s) to build memory for future builds." -ForegroundColor DarkYellow
+    }
 
     return @{ Success = $false; Errors = $Errors }
 }
@@ -1257,31 +1509,47 @@ function Invoke-BildsyPSBranding {
     switch ($Framework) {
         'powershell' {
             $key = 'app.ps1'
-            if ($Files.ContainsKey($key) -and $Files[$key] -notmatch [regex]::Escape($brandingText)) {
-                # Inject About dialog before the last closing brace or at the end
-                $aboutSnippet = @'
+            if (-not $Files.ContainsKey($key)) { break }
+            $psCode = $Files[$key]
+
+            # Skip if branding already present
+            if ($psCode -match [regex]::Escape($brandingText)) { break }
+
+            # Skip if LLM already generated About menu structure
+            if ($psCode -match '\baboutItem\b' -or $psCode -match '\bAbout\b.*ToolStripMenuItem' -or $psCode -match 'MessageBox.*About') { break }
+
+            # Detect the actual form variable name (don't assume $form)
+            $formVar = '$form'
+            if ($psCode -match '(\$\w+)\s*=\s*New-Object\s+System\.Windows\.Forms\.Form') {
+                $formVar = $Matches[1]
+            }
+
+            $aboutSnippet = @"
 
 # --- BildsyPS Branding ---
-$aboutItem = New-Object System.Windows.Forms.ToolStripMenuItem("About")
-$aboutItem.Add_Click({
+`$bildsyAbout = New-Object System.Windows.Forms.ToolStripMenuItem("About")
+`$bildsyAbout.Add_Click({
     [System.Windows.Forms.MessageBox]::Show(
-        "Built with BildsyPS — AI-powered shell orchestrator`nhttps://github.com/gsultani/bildsyps",
+        "Built with BildsyPS — AI-powered shell orchestrator``nhttps://github.com/gsultani/bildsyps",
         "About", [System.Windows.Forms.MessageBoxButtons]::OK,
         [System.Windows.Forms.MessageBoxIcon]::Information)
 })
-if ($form.MainMenuStrip) {
-    $helpMenu = New-Object System.Windows.Forms.ToolStripMenuItem("Help")
-    $helpMenu.DropDownItems.Add($aboutItem)
-    $form.MainMenuStrip.Items.Add($helpMenu)
+if ($formVar.MainMenuStrip) {
+    `$bildsyHelp = $formVar.MainMenuStrip.Items | Where-Object { `$_.Text -eq 'Help' }
+    if (-not `$bildsyHelp) {
+        `$bildsyHelp = New-Object System.Windows.Forms.ToolStripMenuItem("Help")
+        $formVar.MainMenuStrip.Items.Add(`$bildsyHelp)
+    }
+    `$bildsyHelp.DropDownItems.Add(`$bildsyAbout)
 }
-'@
-                # Insert before [Application]::Run or at the end
-                if ($Files[$key] -match '(\[System\.Windows\.Forms\.Application\]::Run)') {
-                    $Files[$key] = $Files[$key] -replace '(\[System\.Windows\.Forms\.Application\]::Run)', "$aboutSnippet`n`$1"
-                }
-                else {
-                    $Files[$key] += "`n$aboutSnippet"
-                }
+"@
+            # Insert before [Application]::Run or at the end (use String.Insert to avoid regex $_ expansion)
+            $insertIdx = $psCode.IndexOf('[System.Windows.Forms.Application]::Run')
+            if ($insertIdx -ge 0) {
+                $Files[$key] = $psCode.Insert($insertIdx, "$aboutSnippet`n")
+            }
+            else {
+                $Files[$key] = $psCode + "`n$aboutSnippet"
             }
         }
         'python-tk' {
@@ -1519,6 +1787,12 @@ function Build-PythonExecutable {
     $python = Get-Command python -ErrorAction SilentlyContinue
     if (-not $python) {
         return @{ Success = $false; Output = "Python not found on PATH. Install Python 3.8+ for Python build lanes." }
+    }
+
+    # Microsoft Store Python is incompatible with PyInstaller (sandboxed file permissions)
+    $pythonPath = $python.Source
+    if ($pythonPath -match 'WindowsApps|Microsoft\\WindowsApps') {
+        return @{ Success = $false; Output = "Microsoft Store Python detected ($pythonPath). PyInstaller is incompatible with this installation. Install Python from https://python.org to a standard path (e.g. C:\Python311)." }
     }
 
     $startTime = Get-Date
@@ -2415,12 +2689,18 @@ function New-AppBuild {
         if ($provConfig) { $resolvedModel = $provConfig.DefaultModel }
     }
 
-    # Step 2: Prompt refinement
-    Write-Host "[AppBuilder] Refining prompt..." -ForegroundColor Cyan
-    $refineResult = Invoke-PromptRefinement -Prompt $Prompt -Framework $framework -Provider $Provider -Model $Model -Theme $Theme
+    # Step 2: Prompt refinement (budget-aware, routed to Haiku 4.5)
+    $refineResult = Invoke-PromptRefinement -Prompt $Prompt -Framework $framework -Provider $Provider -Theme $Theme
     if (-not $refineResult.Success) {
         Write-Host "[AppBuilder] FAILED: $($refineResult.Output)" -ForegroundColor Red
         return $refineResult
+    }
+
+    # Report deferred features so the user knows what got cut
+    $deferredFeatures = if ($refineResult.Deferred) { $refineResult.Deferred } else { @() }
+    if ($deferredFeatures.Count -gt 0) {
+        Write-Host "[AppBuilder] Deferred features (add later via Update-AppBuild):" -ForegroundColor DarkYellow
+        foreach ($df in $deferredFeatures) { Write-Host "  - $df" -ForegroundColor DarkYellow }
     }
 
     # Extract app name from spec if not provided
@@ -2435,33 +2715,134 @@ function New-AppBuild {
 
     Write-Host "[AppBuilder] App name: $Name" -ForegroundColor Cyan
 
+    # Count features from the FEATURES section of the spec ONLY (not plan/contract bullets)
+    # This must happen before plan/contract get appended to $generationSpec
+    $specFeatureCount = 0
+    $specText = $refineResult.Spec
+    if ($specText -match '(?s)FEATURES:\s*\n(.+?)(?:\n[A-Z_]{3,}:|\z)') {
+        $featBlock = $Matches[1]
+        $specFeatureCount = @($featBlock -split "`n" | Where-Object { $_ -match '^\s*-\s+' }).Count
+    }
+    else {
+        # Fallback: count all bullet lines in the raw spec (before plan/contract)
+        $specFeatureCount = @($specText -split "`n" | Where-Object { $_ -match '^\s*-\s+' }).Count
+    }
+    Write-Host "[AppBuilder] Spec feature count: $specFeatureCount (from FEATURES section)" -ForegroundColor DarkGray
+    Write-Host "[AppBuilder] Spec word count: $(($specText -split '\s+').Count)" -ForegroundColor DarkGray
+
     # Step 2b: Planning (for complex specs)
     $planResult = Invoke-BuildPlanning -Spec $refineResult.Spec -Framework $framework -Provider $Provider -Model $Model
     $generationSpec = $refineResult.Spec
     if ($planResult.Plan) {
         $generationSpec += "`n`nIMPLEMENTATION PLAN:`n$($planResult.Plan)"
+
+        # Step 2b2: Contract generation (file-level interfaces for complex specs)
+        $contractResult = Invoke-BuildContract -Spec $refineResult.Spec -Plan $planResult.Plan -Framework $framework -Provider $Provider -Model $Model
+        if ($contractResult.Contract) {
+            $generationSpec += "`n`nINTERFACE CONTRACT (follow these signatures exactly):`n$($contractResult.Contract)"
+        }
     }
 
-    # Step 2c: Complexity gate — estimate token need vs budget
+    # Step 2c: Complexity gate — separate INPUT estimation from OUTPUT budget check
+    # $codeMaxTokens = output token limit (e.g. 64K for Sonnet 4.6). NOT the context window (200K).
+    # Input tokens consume context window. Output tokens consume $codeMaxTokens.
     $codeMaxTokens = Get-BuildMaxTokens -Framework $framework -Model $resolvedModel -Override $MaxTokens
-    $featureLines = @($generationSpec -split "`n" | Where-Object { $_ -match '^\s*-\s+' })
-    $featureCount = $featureLines.Count
+
+    # Estimate input tokens from actual prompt size (spec + plan + contract)
+    $inputTokenEstimate = [math]::Ceiling($generationSpec.Length / 4)
+    Write-Host "[AppBuilder] Input estimate: $($generationSpec.Length) chars (~$inputTokenEstimate tokens). Output budget: $codeMaxTokens tokens (model: $resolvedModel)" -ForegroundColor DarkGray
+
+    # Hard floor: no model with <4096 output tokens can produce a working app
+    if ($codeMaxTokens -lt 4096) {
+        $msg = "Model '$resolvedModel' has an output limit of $codeMaxTokens tokens, which is too low for code generation. Use a model with at least 8192 output tokens (claude-sonnet-4-6 recommended at 64K)."
+        Write-Host "[AppBuilder] FATAL: $msg" -ForegroundColor Red
+        return @{ Success = $false; Output = $msg }
+    }
+
+    # Warning floor: multi-file frameworks need substantial output budgets
+    $multiFileFrameworks = @('tauri', 'powershell', 'python-web')
+    if ($codeMaxTokens -lt 16000 -and $framework -in $multiFileFrameworks) {
+        Write-Host "[AppBuilder] WARNING: Model '$resolvedModel' output limit ($codeMaxTokens tokens) is low for $framework multi-file builds." -ForegroundColor Yellow
+        Write-Host "[AppBuilder] Complex builds will likely truncate. Recommended: claude-sonnet-4-6 (64K output tokens)." -ForegroundColor Yellow
+    }
+
+    # Estimate expected OUTPUT tokens from spec feature count (not input size)
+    # This is how much code the LLM needs to generate, not how much prompt it reads
+    $featureCount = $specFeatureCount
     # Framework-aware base cost: Tauri needs Rust+HTML+CSS+JS+TOML+conf, python-web needs Py+HTML+CSS
-    $baseCost = switch ($framework) {
+    $outputBaseCost = switch ($framework) {
         'tauri'      { 8000 }
         'python-web' { 5000 }
         'python-tk'  { 4500 }
         default      { 4000 }
     }
-    $tokensPerFeature = switch ($framework) {
+    $outputPerFeature = switch ($framework) {
         'tauri'      { 2000 }
         'python-web' { 1800 }
         default      { 1500 }
     }
-    $estimatedTokens = $baseCost + ($featureCount * $tokensPerFeature)
-    if ($estimatedTokens -gt ($codeMaxTokens * 0.8)) {
-        Write-Host "[AppBuilder] WARNING: Estimated complexity (~$featureCount features, ~$estimatedTokens tokens) may exceed output budget ($codeMaxTokens tokens)." -ForegroundColor Yellow
-        Write-Host "[AppBuilder] Consider simplifying the prompt or using a model with higher output limits." -ForegroundColor Yellow
+    $expectedOutputTokens = $outputBaseCost + ($featureCount * $outputPerFeature)
+    Write-Host "[AppBuilder] Output estimate: $featureCount features × $outputPerFeature + $outputBaseCost base = ~$expectedOutputTokens tokens (output budget: $codeMaxTokens, 80% threshold: $([math]::Floor($codeMaxTokens * 0.8)))" -ForegroundColor DarkGray
+
+    # Warn if input is consuming a large share of context window (200K for Anthropic models)
+    $contextWindow = 200000
+    if ($inputTokenEstimate -gt ($contextWindow * 0.5)) {
+        Write-Host "[AppBuilder] WARNING: Input prompt (~$inputTokenEstimate tokens) exceeds 50% of context window ($contextWindow). Generation quality may degrade." -ForegroundColor Yellow
+    }
+
+    if ($expectedOutputTokens -gt ($codeMaxTokens * 0.8)) {
+        # Auto-prune: re-run refinement with a tighter feature cap instead of sending a doomed generation call
+        $frameworkCap = if ($script:FrameworkFeatureCaps.ContainsKey($framework)) { $script:FrameworkFeatureCaps[$framework] } else { 15 }
+        $safeFeatureCount = [math]::Max(5, [math]::Floor(($codeMaxTokens * 0.7 - $outputBaseCost) / $outputPerFeature))
+        # Never exceed the framework's feature cap — the whole point is to stay within budget
+        if ($safeFeatureCount -gt $frameworkCap) { $safeFeatureCount = $frameworkCap }
+        Write-Host "[AppBuilder] Expected output (~$expectedOutputTokens tokens) exceeds 80% of output budget ($codeMaxTokens). Auto-pruning to $safeFeatureCount features (framework cap: $frameworkCap)..." -ForegroundColor Yellow
+
+        $pruneResult = Invoke-PromptRefinement -Prompt $Prompt -Framework $framework -Provider $Provider -Theme $Theme -FeatureCapOverride $safeFeatureCount
+        if ($pruneResult.Success) {
+            $refineResult = $pruneResult
+            $generationSpec = $pruneResult.Spec
+            # Append deferred from prune pass
+            $prunedDeferred = if ($pruneResult.Deferred) { $pruneResult.Deferred } else { @() }
+            if ($prunedDeferred.Count -gt 0) {
+                $deferredFeatures = @($deferredFeatures) + $prunedDeferred
+                Write-Host "[AppBuilder] Additional deferred features after pruning:" -ForegroundColor DarkYellow
+                foreach ($df in $prunedDeferred) { Write-Host "  - $df" -ForegroundColor DarkYellow }
+            }
+
+            # Re-count features from FEATURES section of pruned spec only
+            $specFeatureCount = 0
+            $specText = $pruneResult.Spec
+            if ($specText -match '(?s)FEATURES:\s*\n(.+?)(?:\n[A-Z_]{3,}:|\z)') {
+                $featBlock = $Matches[1]
+                $specFeatureCount = @($featBlock -split "`n" | Where-Object { $_ -match '^\s*-\s+' }).Count
+            }
+            else {
+                $specFeatureCount = @($specText -split "`n" | Where-Object { $_ -match '^\s*-\s+' }).Count
+            }
+            Write-Host "[AppBuilder] Pruned spec feature count: $specFeatureCount (from FEATURES section)" -ForegroundColor DarkGray
+
+            # Re-run planning if spec is still complex
+            $planResult = Invoke-BuildPlanning -Spec $generationSpec -Framework $framework -Provider $Provider -Model $Model
+            if ($planResult.Plan) {
+                $generationSpec += "`n`nIMPLEMENTATION PLAN:`n$($planResult.Plan)"
+            }
+
+            # Verify: expected output still fits?
+            $featureCount = $specFeatureCount
+            $expectedOutputTokens = $outputBaseCost + ($featureCount * $outputPerFeature)
+            $inputTokenEstimate = [math]::Ceiling($generationSpec.Length / 4)
+            Write-Host "[AppBuilder] Post-prune: $featureCount features → ~$expectedOutputTokens output tokens (budget: $codeMaxTokens). Input: ~$inputTokenEstimate tokens." -ForegroundColor DarkGray
+            if ($expectedOutputTokens -gt ($codeMaxTokens * 0.9)) {
+                $msg = "Expected output (~$expectedOutputTokens tokens) still exceeds 90% of output budget ($codeMaxTokens) after pruning to $featureCount features. Simplify the prompt or use a model with higher output limits."
+                Write-Host "[AppBuilder] FATAL: $msg" -ForegroundColor Red
+                return @{ Success = $false; Output = $msg }
+            }
+            Write-Host "[AppBuilder] Pruned spec fits output budget (~$featureCount features, ~$expectedOutputTokens output tokens)." -ForegroundColor Green
+        }
+        else {
+            Write-Host "[AppBuilder] Auto-prune refinement failed. Proceeding with original spec (may truncate)." -ForegroundColor Yellow
+        }
     }
 
     # Step 3: Code generation
@@ -2490,7 +2871,7 @@ function New-AppBuild {
         foreach ($err in $validation.Errors) { Write-Host "  $err" -ForegroundColor Yellow }
 
         $fixResult = Invoke-BuildFixLoop -Spec $refineResult.Spec -Framework $framework `
-            -Errors $validation.Errors -MaxTokens $codeMaxTokens `
+            -Errors $validation.Errors -PreviousFiles $codeResult.Files -MaxTokens $codeMaxTokens `
             -Provider $Provider -Model $Model -Theme $Theme
         if (-not $fixResult.Success) {
             Save-BuildRecord -Name $Name -Framework $framework -Prompt $Prompt -Status 'failed' `
@@ -2500,15 +2881,25 @@ function New-AppBuild {
         $codeResult = $fixResult
     }
 
-    # Step 4b: Review Agent (spec alignment check)
+    # Step 4b: Review Agent (spec alignment check — split into defects vs scope gaps)
     $reviewResult = Invoke-BuildReview -Files $codeResult.Files -Spec $refineResult.Spec -Framework $framework -Provider $Provider -Model $Model
-    if (-not $reviewResult.Passed -and $reviewResult.Issues.Count -gt 0) {
-        Write-Host "[AppBuilder] Review found $($reviewResult.Issues.Count) issue(s). Re-entering fix loop..." -ForegroundColor Yellow
-        foreach ($issue in $reviewResult.Issues) { Write-Host "  $issue" -ForegroundColor Yellow }
+    $scopeGaps = @()
 
-        $reviewErrors = $reviewResult.Issues | ForEach-Object { "[Review] $_" }
+    # Report scope gaps (non-blocking — these are features the LLM deprioritized, not bugs)
+    if ($reviewResult.ScopeGaps -and $reviewResult.ScopeGaps.Count -gt 0) {
+        $scopeGaps = $reviewResult.ScopeGaps
+        Write-Host "[AppBuilder] Scope gaps (not defects — won't retry):" -ForegroundColor DarkYellow
+        foreach ($gap in $scopeGaps) { Write-Host "  - $gap" -ForegroundColor DarkYellow }
+    }
+
+    # Only feed DEFECTS into the fix loop (actual bugs, missing deps, security issues)
+    if ($reviewResult.Defects -and $reviewResult.Defects.Count -gt 0) {
+        Write-Host "[AppBuilder] Review found $($reviewResult.Defects.Count) defect(s). Re-entering fix loop..." -ForegroundColor Yellow
+        foreach ($defect in $reviewResult.Defects) { Write-Host "  $defect" -ForegroundColor Yellow }
+
+        $reviewErrors = $reviewResult.Defects | ForEach-Object { "[Review] $_" }
         $fixResult = Invoke-BuildFixLoop -Spec $refineResult.Spec -Framework $framework `
-            -Errors $reviewErrors -MaxTokens $codeMaxTokens `
+            -Errors $reviewErrors -PreviousFiles $codeResult.Files -MaxTokens $codeMaxTokens `
             -Provider $Provider -Model $Model -Theme $Theme -MaxRetries 1
         if ($fixResult.Success) {
             $codeResult = $fixResult
@@ -2607,6 +2998,8 @@ function New-AppBuild {
             AppName   = $Name
             BuildTime = $totalElapsed
             Output    = $buildResult.Output
+            Deferred  = $deferredFeatures
+            ScopeGaps = if ($scopeGaps) { $scopeGaps } else { @() }
         }
     }
     else {

@@ -492,13 +492,16 @@ function Invoke-AnthropicChat {
             $script:AnthropicHttpHandler.AutomaticDecompression = [System.Net.DecompressionMethods]::GZip -bor [System.Net.DecompressionMethods]::Deflate
         }
         $script:AnthropicHttpClient = [System.Net.Http.HttpClient]::new($script:AnthropicHttpHandler)
+        # Set Timeout once at creation — immutable after first SendAsync.
+        # Per-call timeouts use CancellationTokenSource instead.
+        $script:AnthropicHttpClient.Timeout = [System.Threading.Timeout]::InfiniteTimeSpan
     }
-    $script:AnthropicHttpClient.Timeout = [TimeSpan]::FromSeconds($TimeoutSec)
     $client = $script:AnthropicHttpClient
 
     try {
         while ($attempt -lt $maxRetries) {
             $attempt++
+            $cts = [System.Threading.CancellationTokenSource]::new([TimeSpan]::FromSeconds($TimeoutSec))
             try {
                 $requestContent = [System.Net.Http.StringContent]::new($jsonBody, [System.Text.Encoding]::UTF8, 'application/json')
                 $request = [System.Net.Http.HttpRequestMessage]::new([System.Net.Http.HttpMethod]::Post, $Endpoint)
@@ -507,7 +510,7 @@ function Invoke-AnthropicChat {
                 $request.Headers.Add('anthropic-version', '2023-06-01')
 
                 # ResponseHeadersRead: start reading as soon as headers arrive (required for SSE streaming)
-                $httpResponse = $client.SendAsync($request, [System.Net.Http.HttpCompletionOption]::ResponseHeadersRead).GetAwaiter().GetResult()
+                $httpResponse = $client.SendAsync($request, [System.Net.Http.HttpCompletionOption]::ResponseHeadersRead, $cts.Token).GetAwaiter().GetResult()
 
                 if (-not $httpResponse.IsSuccessStatusCode) {
                     $errBody = $httpResponse.Content.ReadAsStringAsync().GetAwaiter().GetResult()
@@ -581,11 +584,18 @@ function Invoke-AnthropicChat {
             }
             catch {
                 $lastError = $_
+                if ($cts) { $cts.Dispose(); $cts = $null }
                 $ex = $_.Exception
-                $detail = $ex.Message
-                while ($ex.InnerException) {
-                    $ex = $ex.InnerException
-                    $detail += " -> [$($ex.GetType().Name)] $($ex.Message)"
+                # Convert CancellationToken timeout into a clear message
+                if ($ex -is [System.OperationCanceledException] -or ($ex.InnerException -and $ex.InnerException -is [System.OperationCanceledException])) {
+                    $detail = "Request timed out after ${TimeoutSec}s"
+                }
+                else {
+                    $detail = $ex.Message
+                    while ($ex.InnerException) {
+                        $ex = $ex.InnerException
+                        $detail += " -> [$($ex.GetType().Name)] $($ex.Message)"
+                    }
                 }
 
                 if ($attempt -lt $maxRetries) {
@@ -601,11 +611,13 @@ function Invoke-AnthropicChat {
                     throw $lastError
                 }
             }
+            finally {
+                if ($cts) { $cts.Dispose(); $cts = $null }
+            }
         }
     }
     finally {
         # Client is session-scoped — do NOT dispose here. It persists for connection reuse.
-        # Dispose only if a fatal error corrupted the client state.
     }
 }
 
