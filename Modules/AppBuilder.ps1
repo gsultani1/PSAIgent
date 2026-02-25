@@ -251,6 +251,7 @@ RULES:
 2. src-tauri/Cargo.toml: use tauri 2.x with features ["devtools"]. Name the package after the app.
 3. src-tauri/src/main.rs: use tauri::Builder, register any Tauri commands with #[tauri::command].
    Expose backend functions to the frontend via invoke(). Use serde for serialization.
+   CRITICAL FOR TAURI V2: To use app_handle.emit(), you MUST `use tauri::Emitter;`. To manage windows, `use tauri::Manager;`.
 4. src-tauri/tauri.conf.json (Tauri v2 format):
    - "identifier": "com.bildsyps.<appname>", "productName": "<App Name>", "version": "0.1.0"
    - "build": { "frontendDist": "../web" }  — NO devPath or distDir (those are Tauri v1).
