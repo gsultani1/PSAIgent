@@ -3,6 +3,10 @@
 # Provides unified interface for different AI backends
 # If Warp had this, they wouldn't need $73M
 
+# Session-scoped HttpClient for Anthropic — reused across calls to avoid TCP/TLS overhead
+$script:AnthropicHttpClient = $null
+$script:AnthropicHttpHandler = $null
+
 # ===== Provider Configuration =====
 
 # Per-model context window sizes (tokens). Used for intelligent budget management.
@@ -277,7 +281,8 @@ function Invoke-OpenAICompatibleChat {
         [double]$Temperature = 0.7,
         [int]$MaxTokens = 4096,
         [string]$ApiKey = $null,
-        [switch]$Stream
+        [switch]$Stream,
+        [int]$TimeoutSec = 300
     )
     
     $body = @{
@@ -304,6 +309,8 @@ function Invoke-OpenAICompatibleChat {
         $request = [System.Net.HttpWebRequest]::Create($Endpoint)
         $request.Method = "POST"
         $request.ContentType = "application/json"
+        $request.Timeout = $TimeoutSec * 1000
+        $request.ReadWriteTimeout = $TimeoutSec * 1000
         if ($ApiKey) {
             $request.Headers.Add("Authorization", "Bearer $ApiKey")
         }
@@ -364,24 +371,52 @@ function Invoke-OpenAICompatibleChat {
         }
     }
     else {
-        # Non-streaming response
-        $response = Invoke-RestMethod -Uri $Endpoint -Method Post -Body $jsonBody -Headers $headers -ErrorAction Stop
-        
-        if ($null -eq $response.choices -or $response.choices.Count -eq 0) {
-            throw "Server returned empty or malformed response"
-        }
-        
-        $reply = $response.choices[0].message.content
-        if ([string]::IsNullOrWhiteSpace($reply)) {
-            throw "Server returned empty message content"
-        }
-        
-        return @{
-            Content    = $reply
-            Model      = $response.model
-            Usage      = $response.usage
-            StopReason = $response.choices[0].finish_reason
-            Streamed   = $false
+        # Non-streaming response with retry
+        $maxRetries = 3
+        $attempt = 0
+        $lastError = $null
+
+        while ($attempt -lt $maxRetries) {
+            $attempt++
+            try {
+                $response = Invoke-RestMethod -Uri $Endpoint -Method Post -Body ([System.Text.Encoding]::UTF8.GetBytes($jsonBody)) -Headers $headers -ContentType 'application/json; charset=utf-8' -TimeoutSec $TimeoutSec -ErrorAction Stop
+
+                if ($null -eq $response.choices -or $response.choices.Count -eq 0) {
+                    throw "Server returned empty or malformed response"
+                }
+
+                $reply = $response.choices[0].message.content
+                if ([string]::IsNullOrWhiteSpace($reply)) {
+                    throw "Server returned empty message content"
+                }
+
+                return @{
+                    Content    = $reply
+                    Model      = $response.model
+                    Usage      = $response.usage
+                    StopReason = $response.choices[0].finish_reason
+                    Streamed   = $false
+                }
+            }
+            catch {
+                $lastError = $_
+                $ex = $_.Exception
+                $detail = $ex.Message
+                while ($ex.InnerException) {
+                    $ex = $ex.InnerException
+                    $detail += " -> [$($ex.GetType().Name)] $($ex.Message)"
+                }
+
+                if ($attempt -lt $maxRetries) {
+                    $wait = $attempt * 5
+                    Write-Host "[OpenAI] Attempt $attempt/$maxRetries failed: $detail" -ForegroundColor Yellow
+                    Write-Host "[OpenAI] Retrying in ${wait}s..." -ForegroundColor Yellow
+                    Start-Sleep -Seconds $wait
+                }
+                else {
+                    throw $lastError
+                }
+            }
         }
     }
 }
@@ -394,7 +429,8 @@ function Invoke-AnthropicChat {
         [double]$Temperature = 0.7,
         [int]$MaxTokens = 4096,
         [string]$ApiKey,
-        [string]$SystemPrompt = $null
+        [string]$SystemPrompt = $null,
+        [int]$TimeoutSec = 300
     )
     
     # Anthropic uses a different message format
@@ -415,10 +451,14 @@ function Invoke-AnthropicChat {
         }
     }
     
+    # Always use streaming to keep the connection alive during long generations.
+    # Non-streaming requests fail with ResponseEnded on large outputs (64K+ tokens)
+    # because intermediate infrastructure drops idle HTTP connections.
     $body = @{
         model      = $Model
         max_tokens = $MaxTokens
         messages   = $anthropicMessages
+        stream     = $true
     }
     
     if ($SystemPrompt) {
@@ -431,32 +471,153 @@ function Invoke-AnthropicChat {
     
     $jsonBody = $body | ConvertTo-Json -Depth 10
     
-    $headers = @{
-        "Content-Type"      = "application/json"
-        "x-api-key"         = $ApiKey
-        "anthropic-version" = "2023-06-01"
-    }
-    
-    $apiResponse = Invoke-RestMethod -Uri $Endpoint -Method Post -Body $jsonBody -Headers $headers -ErrorAction Stop
-    
-    if ($null -eq $apiResponse.content -or $apiResponse.content.Count -eq 0) {
-        throw "Anthropic returned empty response"
-    }
-    
-    $reply = ($apiResponse.content | Where-Object { $_.type -eq 'text' } | Select-Object -First 1).text
-    if ([string]::IsNullOrWhiteSpace($reply)) {
-        throw "Anthropic returned empty message content"
-    }
-    
-    return @{
-        Content    = $reply
-        Model      = $apiResponse.model
-        Usage      = @{
-            prompt_tokens     = $apiResponse.usage.input_tokens
-            completion_tokens = $apiResponse.usage.output_tokens
-            total_tokens      = $apiResponse.usage.input_tokens + $apiResponse.usage.output_tokens
+    $maxRetries = 5
+    $attempt = 0
+    $lastError = $null
+
+    # Reuse session-scoped HttpClient to avoid TCP/TLS overhead on consecutive calls
+    if ($null -eq $script:AnthropicHttpClient) {
+        try {
+            $script:AnthropicHttpHandler = [System.Net.Http.SocketsHttpHandler]::new()
+            $script:AnthropicHttpHandler.AutomaticDecompression = [System.Net.DecompressionMethods]::GZip -bor [System.Net.DecompressionMethods]::Deflate
+            $script:AnthropicHttpHandler.PooledConnectionLifetime = [TimeSpan]::FromMinutes(15)
+            $script:AnthropicHttpHandler.PooledConnectionIdleTimeout = [TimeSpan]::FromMinutes(10)
+            $script:AnthropicHttpHandler.KeepAlivePingPolicy = [System.Net.Http.HttpKeepAlivePingPolicy]::WithActiveRequests
+            $script:AnthropicHttpHandler.KeepAlivePingDelay = [TimeSpan]::FromSeconds(15)
+            $script:AnthropicHttpHandler.KeepAlivePingTimeout = [TimeSpan]::FromSeconds(10)
         }
-        StopReason = $apiResponse.stop_reason
+        catch {
+            if ($script:AnthropicHttpHandler) { $script:AnthropicHttpHandler.Dispose(); $script:AnthropicHttpHandler = $null }
+            $script:AnthropicHttpHandler = [System.Net.Http.HttpClientHandler]::new()
+            $script:AnthropicHttpHandler.AutomaticDecompression = [System.Net.DecompressionMethods]::GZip -bor [System.Net.DecompressionMethods]::Deflate
+        }
+        $script:AnthropicHttpClient = [System.Net.Http.HttpClient]::new($script:AnthropicHttpHandler)
+        # Set Timeout once at creation — immutable after first SendAsync.
+        # Per-call timeouts use CancellationTokenSource instead.
+        $script:AnthropicHttpClient.Timeout = [System.Threading.Timeout]::InfiniteTimeSpan
+    }
+    $client = $script:AnthropicHttpClient
+
+    try {
+        while ($attempt -lt $maxRetries) {
+            $attempt++
+            $cts = [System.Threading.CancellationTokenSource]::new([TimeSpan]::FromSeconds($TimeoutSec))
+            try {
+                $requestContent = [System.Net.Http.StringContent]::new($jsonBody, [System.Text.Encoding]::UTF8, 'application/json')
+                $request = [System.Net.Http.HttpRequestMessage]::new([System.Net.Http.HttpMethod]::Post, $Endpoint)
+                $request.Content = $requestContent
+                $request.Headers.Add('x-api-key', $ApiKey)
+                $request.Headers.Add('anthropic-version', '2023-06-01')
+
+                # ResponseHeadersRead: start reading as soon as headers arrive (required for SSE streaming)
+                $httpResponse = $client.SendAsync($request, [System.Net.Http.HttpCompletionOption]::ResponseHeadersRead, $cts.Token).GetAwaiter().GetResult()
+
+                if (-not $httpResponse.IsSuccessStatusCode) {
+                    $errBody = $httpResponse.Content.ReadAsStringAsync().GetAwaiter().GetResult()
+                    $statusCode = [int]$httpResponse.StatusCode
+                    if ($statusCode -ge 429) {
+                        throw "HTTP $statusCode`: $errBody"
+                    }
+                    throw "Anthropic API error (HTTP $statusCode`): $errBody"
+                }
+
+                # Read SSE stream: accumulate text deltas from content_block_delta events
+                $responseStream = $httpResponse.Content.ReadAsStreamAsync().GetAwaiter().GetResult()
+                $reader = [System.IO.StreamReader]::new($responseStream, [System.Text.Encoding]::UTF8)
+
+                $textBuilder = [System.Text.StringBuilder]::new(65536)
+                $responseModel = $Model
+                $stopReason = 'stop'
+                $inputTokens = 0
+                $outputTokens = 0
+
+                while (-not $reader.EndOfStream) {
+                    $line = $reader.ReadLine()
+
+                    # SSE format: "event: <type>" then "data: <json>" then blank line
+                    if (-not $line -or -not $line.StartsWith('data: ')) { continue }
+
+                    $data = $line.Substring(6)
+                    if ($data -eq '[DONE]') { break }
+
+                    try { $evt = $data | ConvertFrom-Json } catch { continue }
+
+                    switch ($evt.type) {
+                        'message_start' {
+                            if ($evt.message.model) { $responseModel = $evt.message.model }
+                            if ($evt.message.usage) {
+                                $inputTokens = [int]$evt.message.usage.input_tokens
+                            }
+                        }
+                        'content_block_delta' {
+                            if ($evt.delta.type -eq 'text_delta' -and $evt.delta.text) {
+                                $null = $textBuilder.Append($evt.delta.text)
+                            }
+                        }
+                        'message_delta' {
+                            if ($evt.delta.stop_reason) { $stopReason = $evt.delta.stop_reason }
+                            if ($evt.usage.output_tokens) {
+                                $outputTokens = [int]$evt.usage.output_tokens
+                            }
+                        }
+                    }
+                }
+
+                $reader.Dispose()
+                $responseStream.Dispose()
+
+                $reply = $textBuilder.ToString()
+                if ([string]::IsNullOrWhiteSpace($reply)) {
+                    throw "Anthropic returned empty message content (streamed)"
+                }
+
+                return @{
+                    Content    = $reply
+                    Model      = $responseModel
+                    Usage      = @{
+                        prompt_tokens     = $inputTokens
+                        completion_tokens = $outputTokens
+                        total_tokens      = $inputTokens + $outputTokens
+                    }
+                    StopReason = $stopReason
+                }
+            }
+            catch {
+                $lastError = $_
+                if ($cts) { $cts.Dispose(); $cts = $null }
+                $ex = $_.Exception
+                # Convert CancellationToken timeout into a clear message
+                if ($ex -is [System.OperationCanceledException] -or ($ex.InnerException -and $ex.InnerException -is [System.OperationCanceledException])) {
+                    $detail = "Request timed out after ${TimeoutSec}s"
+                }
+                else {
+                    $detail = $ex.Message
+                    while ($ex.InnerException) {
+                        $ex = $ex.InnerException
+                        $detail += " -> [$($ex.GetType().Name)] $($ex.Message)"
+                    }
+                }
+
+                if ($attempt -lt $maxRetries) {
+                    $base = [math]::Pow(2, $attempt) * 2
+                    $jitter = Get-Random -Minimum 0 -Maximum ([math]::Max(1, [int]($base * 0.3)))
+                    $wait = [int]$base + $jitter
+                    Write-Host "[Anthropic] Attempt $attempt/$maxRetries failed: $detail" -ForegroundColor Yellow
+                    Write-Host "[Anthropic] Retrying in ${wait}s..." -ForegroundColor Yellow
+                    Start-Sleep -Seconds $wait
+                }
+                else {
+                    Write-Host "[Anthropic] All $maxRetries attempts failed: $detail" -ForegroundColor Red
+                    throw $lastError
+                }
+            }
+            finally {
+                if ($cts) { $cts.Dispose(); $cts = $null }
+            }
+        }
+    }
+    finally {
+        # Client is session-scoped — do NOT dispose here. It persists for connection reuse.
     }
 }
 
@@ -534,7 +695,8 @@ function Invoke-ChatCompletion {
         [double]$Temperature = 0.7,
         [int]$MaxTokens = 4096,
         [string]$SystemPrompt = $null,
-        [switch]$Stream
+        [switch]$Stream,
+        [int]$TimeoutSec = 300
     )
     
     $config = $global:ChatProviders[$Provider]
@@ -559,11 +721,11 @@ function Invoke-ChatCompletion {
     # Route to appropriate API handler
     switch ($config.Format) {
         'openai' {
-            return Invoke-OpenAICompatibleChat -Endpoint $config.Endpoint -Model $Model -Messages $Messages -Temperature $Temperature -MaxTokens $MaxTokens -ApiKey $apiKey -Stream:$Stream
+            return Invoke-OpenAICompatibleChat -Endpoint $config.Endpoint -Model $Model -Messages $Messages -Temperature $Temperature -MaxTokens $MaxTokens -ApiKey $apiKey -Stream:$Stream -TimeoutSec $TimeoutSec
         }
         'anthropic' {
             # Anthropic streaming not yet implemented, fall back to non-streaming
-            return Invoke-AnthropicChat -Endpoint $config.Endpoint -Model $Model -Messages $Messages -Temperature $Temperature -MaxTokens $MaxTokens -ApiKey $apiKey -SystemPrompt $SystemPrompt
+            return Invoke-AnthropicChat -Endpoint $config.Endpoint -Model $Model -Messages $Messages -Temperature $Temperature -MaxTokens $MaxTokens -ApiKey $apiKey -SystemPrompt $SystemPrompt -TimeoutSec $TimeoutSec
         }
         'llm-cli' {
             return Invoke-LLMCliChat -Model $Model -Messages $Messages -SystemPrompt $SystemPrompt

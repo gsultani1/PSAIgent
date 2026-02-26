@@ -1,5 +1,5 @@
 # BildsyPS Setup Guide
-> **v1.4.1** — 368 tests, 0 failures
+> **v1.5.0** — 133 tests, 0 failures
 
 ## Quick Start
 
@@ -95,12 +95,19 @@ tools
 
 ### 5. App Builder Dependencies (Optional)
 
-The App Builder compiles standalone `.exe` files from natural language prompts. Dependencies vary by build lane:
+The App Builder compiles standalone `.exe` files (or module packages) from natural language prompts. Dependencies vary by build lane:
 
 **PowerShell lane (default — recommended):**
 ```powershell
 # Only dependency — compiles .ps1 to .exe
 Install-Module ps2exe -Scope CurrentUser
+```
+
+**PowerShell Module lane — no extra dependencies:**
+```powershell
+# Generates a .psm1 + .psd1 module and packages it as a .zip
+# No additional tools required
+build powershell-module "a module for parsing log files"
 ```
 
 **Python lanes (python-tk, python-web):**
@@ -110,6 +117,18 @@ python --version
 
 # PyInstaller is installed automatically in a per-build venv
 # For python-web lane, pywebview is also installed automatically
+```
+
+**Tauri lane:**
+```powershell
+# Rust toolchain required
+winget install Rustlang.Rustup
+rustup default stable
+
+# Node.js required for Tauri CLI
+winget install OpenJS.NodeJS
+
+# Tauri CLI installed automatically during first build
 ```
 
 ---
@@ -334,7 +353,7 @@ Invoke-MCPTool -ServerName <tab>     # lists connected MCP servers
 
 Remove-AppBuild -Name <tab>          # lists builds from filesystem
 Update-AppBuild -Name <tab>          # lists builds from filesystem
-New-AppBuild -Framework <tab>        # powershell / python-tk / python-web
+New-AppBuild -Framework <tab>        # powershell / powershell-module / python-tk / python-web / tauri
 
 Remove-AgentTask -Id <tab>           # lists heartbeat task IDs
 Enable-AgentTask -Id <tab>           # lists heartbeat task IDs
@@ -401,8 +420,11 @@ vision --full     # Send at full resolution
 ocr image.png     # Extract text via Tesseract
 
 # App Builder
-build "a todo list app"              # Build .exe from prompt
+build "a todo list app"              # Build .exe from prompt (PowerShell lane)
 build python-tk "a calculator"       # Force Python-TK lane
+build python-web "a markdown editor" # PyWebView + HTML/CSS/JS
+build tauri "a native counter app"   # Rust + HTML/CSS/JS via Tauri
+build powershell-module "a log parser module"  # .psm1/.psd1 zip package
 build -tokens 32000 "complex app"    # Override token budget
 builds                               # List all builds
 rebuild my-app "add dark mode"       # Modify existing build
