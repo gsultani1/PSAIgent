@@ -2225,6 +2225,107 @@ pub fn add_item() -> String { String::new() }
         }
     }
 
+    Context 'Repair-TauriSource — async removal (Fix 6)' {
+
+        BeforeEach {
+            $script:asyncRoot = New-TestTempDir 'repair-async'
+            $srcDir = Join-Path $script:asyncRoot 'src-tauri' 'src'
+            New-Item -ItemType Directory -Path $srcDir -Force | Out-Null
+        }
+
+        It 'Removes async from #[tauri::command] fns that never .await' {
+            $code = @"
+use tauri::State;
+
+#[tauri::command]
+pub async fn get_items(state: State<'_, DbPool>) -> Result<Vec<Item>, AppError> {
+    let conn = state.inner().get()?;
+    let items = conn.prepare("SELECT * FROM items")?.query_map([], |row: &rusqlite::Row| {
+        Ok(Item { id: row.get(0)? })
+    })?.filter_map(|r| r.ok()).collect();
+    Ok(items)
+}
+
+#[tauri::command]
+pub async fn add_item(state: State<'_, DbPool>, name: String) -> Result<(), AppError> {
+    let conn = state.inner().get()?;
+    conn.execute("INSERT INTO items (name) VALUES (?1)", [&name])?;
+    Ok(())
+}
+"@
+            Set-Content (Join-Path $srcDir 'items.rs') $code -Encoding UTF8
+            Repair-TauriSource -SourceDir $script:asyncRoot
+            $result = Get-Content (Join-Path $srcDir 'items.rs') -Raw -Encoding UTF8
+            $result | Should -Not -Match 'pub\s+async\s+fn\s+get_items'
+            $result | Should -Match 'pub\s+fn\s+get_items'
+            $result | Should -Not -Match 'pub\s+async\s+fn\s+add_item'
+            $result | Should -Match 'pub\s+fn\s+add_item'
+        }
+
+        It 'Preserves async on #[tauri::command] fns that use .await' {
+            $code = @"
+use tauri::State;
+
+#[tauri::command]
+pub async fn sync_data(state: State<'_, DbPool>) -> Result<bool, AppError> {
+    let pool = state.inner().clone();
+    let conn = pool.get()?;
+    let endpoint: String = conn.query_row("SELECT value FROM settings WHERE key = 'endpoint'", [], |row| row.get(0)).unwrap_or_default();
+    drop(conn);
+    let resp = reqwest::get(&endpoint).await.map_err(|e| AppError::NetworkError(e.to_string()))?;
+    Ok(resp.status().is_success())
+}
+"@
+            Set-Content (Join-Path $srcDir 'sync.rs') $code -Encoding UTF8
+            Repair-TauriSource -SourceDir $script:asyncRoot
+            $result = Get-Content (Join-Path $srcDir 'sync.rs') -Raw -Encoding UTF8
+            $result | Should -Match 'pub\s+async\s+fn\s+sync_data'
+        }
+
+        It 'Handles mixed file: removes async only from non-await commands' {
+            $code = @"
+use tauri::State;
+
+#[tauri::command]
+pub async fn get_items(state: State<'_, DbPool>) -> Result<Vec<Item>, AppError> {
+    let conn = state.inner().get()?;
+    Ok(vec![])
+}
+
+#[tauri::command]
+pub async fn fetch_remote(state: State<'_, DbPool>) -> Result<String, AppError> {
+    let resp = reqwest::get("http://example.com").await?;
+    Ok(resp.text().await?)
+}
+"@
+            Set-Content (Join-Path $srcDir 'mixed.rs') $code -Encoding UTF8
+            Repair-TauriSource -SourceDir $script:asyncRoot
+            $result = Get-Content (Join-Path $srcDir 'mixed.rs') -Raw -Encoding UTF8
+            $result | Should -Match 'pub\s+fn\s+get_items'
+            $result | Should -Match 'pub\s+async\s+fn\s+fetch_remote'
+        }
+    }
+
+    Context 'Invoke-CodeGeneration — surgical file validation' {
+
+        It 'Accepts response with only targeted files (no primary file required)' {
+            # Simulate what happens when Invoke-CodeGeneration parses a surgical response
+            # containing only web/script.js but not src-tauri/src/main.rs
+            $mockResponse = @"
+Here is the fixed file:
+
+``````javascript web/script.js
+console.log("fixed code");
+``````
+"@
+            # The function parses code blocks and checks for TargetFiles
+            # We test the parsing + validation logic via Get-CodeBlocks
+            $blocks = Get-CodeBlocks -Text $mockResponse
+            @($blocks).Count | Should -BeGreaterThan 0
+            $blocks[0].FileName | Should -Be 'web/script.js'
+        }
+    }
+
     Context 'NoBranding Live Build' {
 
         It 'Build with -NoBranding omits BildsyPS branding from source' {

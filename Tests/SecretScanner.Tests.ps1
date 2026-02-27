@@ -105,6 +105,18 @@ Describe 'SecretScanner — Offline' {
             @($result).Count | Should -BeGreaterThan 0
             $result[0].Pattern | Should -Be 'Generic Secret Assign'
         }
+
+        It 'Does not flag property access patterns as secrets (settings.api_key, config.token)' {
+            $f = "$global:BildsyPSHome\config\test-prop-access.txt"
+            Set-Content -Path $f -Value @(
+                'const apiKey = settings.api_key;'
+                'let token = config.auth_token;'
+                'var secret = process.env.MY_SECRET;'
+                'apiKey: this.config.apiKey'
+            )
+            $result = Invoke-SecretScan -Paths @($f)
+            @($result).Count | Should -Be 0
+        }
     }
 
     Context 'Show-SecretScanReport' {

@@ -797,7 +797,8 @@ function Invoke-CodeGeneration {
         [int]$MaxTokens,
         [string]$Provider,
         [string]$Model,
-        [string]$Theme = 'system'
+        [string]$Theme = 'system',
+        [string[]]$TargetFiles = @()
     )
 
     $systemPrompt = switch ($Framework) {
@@ -901,23 +902,33 @@ function Invoke-CodeGeneration {
             return @{ Success = $false; Output = "No code blocks found in LLM response. Raw response saved for debugging." }
         }
 
-        # Validate we got the primary file
-        $primaryFile = switch ($Framework) {
-            'powershell'        { 'app.ps1' }
-            'powershell-module' { $files.Keys | Where-Object { $_ -match '\.psm1$' } | Select-Object -First 1 }
-            'tauri'             { 'src-tauri/src/main.rs' }
-            default             { 'app.py' }
-        }
-        if (-not $primaryFile) { $primaryFile = 'module.psm1' }
-        if (-not $files.ContainsKey($primaryFile)) {
-            # Try to find the closest match
-            $candidate = $files.Keys | Where-Object { $_ -match '\.(ps1|psm1|py|rs)$' } | Select-Object -First 1
-            if ($candidate) {
-                $files[$primaryFile] = $files[$candidate]
-                if ($candidate -ne $primaryFile) { $files.Remove($candidate) }
+        # Validate we got the expected files
+        if ($TargetFiles.Count -gt 0) {
+            # Surgical mode: only require at least one of the targeted files
+            $found = @($TargetFiles | Where-Object { $files.ContainsKey($_) })
+            if ($found.Count -eq 0) {
+                return @{ Success = $false; Output = "Surgical fix response missing all targeted files ($($TargetFiles -join ', '))." }
             }
-            else {
-                return @{ Success = $false; Output = "Generated code missing primary file ($primaryFile)." }
+        }
+        else {
+            # Full generation: validate we got the primary file
+            $primaryFile = switch ($Framework) {
+                'powershell'        { 'app.ps1' }
+                'powershell-module' { $files.Keys | Where-Object { $_ -match '\.psm1$' } | Select-Object -First 1 }
+                'tauri'             { 'src-tauri/src/main.rs' }
+                default             { 'app.py' }
+            }
+            if (-not $primaryFile) { $primaryFile = 'module.psm1' }
+            if (-not $files.ContainsKey($primaryFile)) {
+                # Try to find the closest match
+                $candidate = $files.Keys | Where-Object { $_ -match '\.(ps1|psm1|py|rs)$' } | Select-Object -First 1
+                if ($candidate) {
+                    $files[$primaryFile] = $files[$candidate]
+                    if ($candidate -ne $primaryFile) { $files.Remove($candidate) }
+                }
+                else {
+                    return @{ Success = $false; Output = "Generated code missing primary file ($primaryFile)." }
+                }
             }
         }
 
@@ -1466,8 +1477,16 @@ function Invoke-BuildFixLoop {
             Write-Host "[AppBuilder] Fix attempt $retry/$MaxRetries (full regeneration)..." -ForegroundColor Yellow
         }
 
-        $codeResult = Invoke-CodeGeneration -Spec $fixSpec -Framework $Framework `
-            -MaxTokens $MaxTokens -Provider $Provider -Model $Model -Theme $Theme
+        $genParams = @{
+            Spec      = $fixSpec
+            Framework = $Framework
+            MaxTokens = $MaxTokens
+            Provider  = $Provider
+            Model     = $Model
+            Theme     = $Theme
+        }
+        if ($useSurgical) { $genParams.TargetFiles = $errorFiles }
+        $codeResult = Invoke-CodeGeneration @genParams
         if (-not $codeResult.Success) {
             Write-Host "[AppBuilder] Fix attempt $retry generation failed: $($codeResult.Output)" -ForegroundColor Red
             continue
@@ -1990,7 +2009,25 @@ function Repair-TauriSource {
         }
         $content = $cleanedLines -join "`n"
 
-        # ── Fix 5: Dedup main.rs when lib.rs + commands/ exist ──
+        # ── Fix 5: Remove async from #[tauri::command] fns that never .await ──
+        # LLMs mark all Tauri commands as async even when they do only synchronous DB work.
+        # If an async fn captures a non-Send type (rusqlite::Connection) the compiler rejects it (E0277).
+        # Split on #[tauri::command] boundaries and check each chunk for .await usage.
+        if ($content -match '#\[tauri::command\]') {
+            $chunks = $content -split '(?=#\[tauri::command\])'
+            $newChunks = @()
+            foreach ($chunk in $chunks) {
+                if ($chunk -match '#\[tauri::command\]' -and $chunk -match 'pub\s+async\s+fn' -and $chunk -notmatch '\.await') {
+                    $chunk = $chunk -replace 'pub\s+async\s+fn', 'pub fn'
+                    $repairCount++
+                    Write-Host "[Repair-TauriSource] Removed unnecessary async from command in $($rsFile.Name)" -ForegroundColor DarkGray
+                }
+                $newChunks += $chunk
+            }
+            $content = $newChunks -join ''
+        }
+
+        # ── Fix 6: Dedup main.rs when lib.rs + commands/ exist ──
         if ($rsFile.Name -eq 'main.rs') {
             $libRs = Join-Path $srcDir 'lib.rs'
             $cmdDir = Join-Path $srcDir 'commands'
